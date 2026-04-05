@@ -65,17 +65,17 @@ Download prebuilt binaries from [GitHub Releases](https://github.com/code-yeongy
 ### Via `pi install` (Recommended)
 
 ```bash
-pi install git:github.com/djdembeck/pi-comment-checker-extension
+pi install git:github.com/djdembeck/pi-comment-checker
 ```
 
 ### Manual Installation
 
 ```bash
 # Clone to Pi extensions directory
-git clone https://github.com/djdembeck/pi-comment-checker-extension.git ~/.pi/agent/extensions/pi-comment-checker
+git clone https://github.com/djdembeck/pi-comment-checker.git ~/.pi/agent/extensions/pi-comment-checker
 
 # Or symlink from anywhere
-ln -s /path/to/pi-comment-checker-extension ~/.pi/agent/extensions/pi-comment-checker
+ln -s /path/to/pi-comment-checker ~/.pi/agent/extensions/pi-comment-checker
 ```
 
 ## Binary Location Resolution
@@ -133,7 +133,7 @@ pi.on("tool_result", async (event, ctx) => {
 ## Package Structure
 
 ```
-pi-comment-checker-extension/
+pi-comment-checker/
 ├── extensions/
 │   └── index.ts          # Extension entry point
 ├── src/                  # Additional source files (if needed)
@@ -164,7 +164,7 @@ pi-comment-checker-extension/
 Check Pi's extension loading:
 ```bash
 # Test load directly
-pi -e /path/to/pi-comment-checker-extension/extensions/index.ts
+pi -e /path/to/pi-comment-checker/extensions/index.ts
 
 # Check Pi logs for extension loading errors
 ```
