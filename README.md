@@ -19,54 +19,63 @@ This extension watches `write`, `edit`, `multiedit`, and `apply_patch` tool call
 
 ## Prerequisites
 
-- [go-claude-code-comment-checker](https://github.com/code-yeongyu/go-claude-code-comment-checker) binary built and available
+- [go-claude-code-comment-checker](https://github.com/code-yeongyu/go-claude-code-comment-checker) binary installed
 
-## Installation
+## Installing the Binary
 
-### Option 1: Via `pi install` (Recommended)
+### Option 1: Go Install (Recommended)
+
+Single command, auto-updates, cross-platform:
+
+```bash
+go install github.com/code-yeongyu/go-claude-code-comment-checker/cmd/comment-checker@latest
+```
+
+Verify it's in your PATH:
+```bash
+comment-checker --help
+```
+
+### Option 2: Homebrew (macOS/Linux)
+
+```bash
+brew tap code-yeongyu/tap
+brew install comment-checker
+```
+
+### Option 3: Clone and Build
+
+For development or to have the source available:
+
+```bash
+git clone https://github.com/code-yeongyu/go-claude-code-comment-checker.git
+cd go-claude-code-comment-checker
+go build -o comment-checker ./cmd/comment-checker
+
+# Move to a location in your PATH
+mv comment-checker ~/.local/bin/
+```
+
+### Option 4: Download Release Binary
+
+Download prebuilt binaries from [GitHub Releases](https://github.com/code-yeongyu/go-claude-code-comment-checker/releases).
+
+## Installing the Pi Extension
+
+### Via `pi install` (Recommended)
 
 ```bash
 pi install git:github.com/djdembeck/pi-comment-checker-extension
 ```
 
-### Option 2: Manual Global Installation
+### Manual Installation
 
 ```bash
-# Clone this extension
+# Clone to Pi extensions directory
 git clone https://github.com/djdembeck/pi-comment-checker-extension.git ~/.pi/agent/extensions/pi-comment-checker
 
 # Or symlink from anywhere
 ln -s /path/to/pi-comment-checker-extension ~/.pi/agent/extensions/pi-comment-checker
-```
-
-### Option 3: Project-Local Installation
-
-```bash
-# Copy or symlink to your project's .pi/extensions/
-ln -s /path/to/pi-comment-checker-extension /path/to/your/project/.pi/extensions/pi-comment-checker
-```
-
-### Option 4: Direct Path in Settings
-
-Add to your Pi settings (`~/.config/pi/settings.json`):
-```json
-{
-  "packages": [
-    "git:github.com/djdembeck/pi-comment-checker-extension"
-  ]
-}
-```
-
-## Build the Comment Checker Binary
-
-```bash
-# Clone go-claude-code-comment-checker (as a sibling to this project or anywhere)
-git clone https://github.com/code-yeongyu/go-claude-code-comment-checker.git
-cd go-claude-code-comment-checker
-go build -o comment-checker ./cmd/comment-checker
-
-# Or install globally
-go install ./cmd/comment-checker@latest
 ```
 
 ## Binary Location Resolution

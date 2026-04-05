@@ -360,17 +360,23 @@ ${message}
 
 To install the comment-checker binary:
 
-1. Clone and build go-claude-code-comment-checker:
+**Recommended (single command):**
+   go install github.com/code-yeongyu/go-claude-code-comment-checker/cmd/comment-checker@latest
+
+**Alternative methods:**
+
+Homebrew (macOS/Linux):
+   brew tap code-yeongyu/tap
+   brew install comment-checker
+
+Build from source:
    git clone https://github.com/code-yeongyu/go-claude-code-comment-checker.git
    cd go-claude-code-comment-checker
    go build -o comment-checker ./cmd/comment-checker
+   mv comment-checker ~/.local/bin/
 
-2. Or install globally:
-   go install ./cmd/comment-checker@latest
-
-3. Or use Homebrew:
-   brew tap code-yeongyu/tap
-   brew install comment-checker
+Download prebuilt:
+   https://github.com/code-yeongyu/go-claude-code-comment-checker/releases
 `;
         ctx.ui.notify("comment-checker: Binary not found — see output for help", "error");
         return {
@@ -379,7 +385,7 @@ To install the comment-checker binary:
         };
       }
 
-      ctx.ui.notify(`comment-checker: ${status.path}`, "info");
+      ctx.ui.notify(`comment-checker: ${status.path} (${status.source})`, "info");
       return {
         content: [{ type: "text", text: message }],
         isError: false,
