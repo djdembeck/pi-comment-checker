@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ToolResult } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
+import { accessSync, constants } from "node:fs";
 import { resolve } from "node:path";
 
 /**
@@ -35,38 +36,56 @@ interface CommentCheckerOutput {
   }>;
 }
 
-function getCommentCheckerPath(): string {
-  // Look for binary in common locations
-  const paths = [
-    // Sibling project (where go-claude-code-comment-checker was cloned)
-    resolve(process.cwd(), "../go-claude-code-comment-checker/comment-checker"),
-    resolve(process.cwd(), "../../go-claude-code-comment-checker/comment-checker"),
-    // Global install locations
-    "/usr/local/bin/comment-checker",
-    "/usr/bin/comment-checker",
-    `${process.env.HOME}/.local/bin/comment-checker`,
-    `${process.env.HOME}/go/bin/comment-checker`,
-  ];
+interface BinaryStatus {
+  found: boolean;
+  path: string;
+  source: "sibling" | "global" | "path" | "not-found";
+}
 
-  for (const path of paths) {
+function getBinaryCandidates(): Array<{ path: string; source: BinaryStatus["source"] }> {
+  return [
+    // Sibling project (where go-claude-code-comment-checker was cloned)
+    { path: resolve(process.cwd(), "../go-claude-code-comment-checker/comment-checker"), source: "sibling" as const },
+    { path: resolve(process.cwd(), "../../go-claude-code-comment-checker/comment-checker"), source: "sibling" as const },
+    // Global install locations
+    { path: "/usr/local/bin/comment-checker", source: "global" as const },
+    { path: "/usr/bin/comment-checker", source: "global" as const },
+    { path: `${process.env.HOME}/.local/bin/comment-checker`, source: "global" as const },
+    { path: `${process.env.HOME}/go/bin/comment-checker`, source: "global" as const },
+    // Will try PATH lookup
+    { path: "comment-checker", source: "path" as const },
+  ];
+}
+
+function findBinary(): BinaryStatus {
+  const candidates = getBinaryCandidates();
+
+  for (const { path, source } of candidates) {
     try {
-      // Check if file exists and is executable
-      const { accessSync, constants } = require("node:fs");
       accessSync(path, constants.X_OK);
-      return path;
+      return { found: true, path, source };
     } catch {
       continue;
     }
   }
 
-  // Fallback: try to find in PATH
-  return "comment-checker";
+  return { found: false, path: "comment-checker", source: "not-found" };
 }
 
-async function runCommentChecker(input: CommentCheckerInput): Promise<CommentCheckerOutput | null> {
-  const binaryPath = getCommentCheckerPath();
+function formatBinaryStatus(status: BinaryStatus): string {
+  if (status.found) {
+    return `✓ Binary found (${status.source}): ${status.path}`;
+  }
+  return `✗ Binary not found. Searched:\n${getBinaryCandidates()
+    .map((c) => `  - ${c.path}`)
+    .join("\n")}`;
+}
 
-  return new Promise((resolve, reject) => {
+async function runCommentChecker(
+  input: CommentCheckerInput,
+  binaryPath: string,
+): Promise<CommentCheckerOutput | null> {
+  return new Promise((resolve) => {
     const child = spawn(binaryPath, [], {
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -83,26 +102,26 @@ async function runCommentChecker(input: CommentCheckerInput): Promise<CommentChe
     });
 
     child.on("close", (code) => {
-      // Exit code 0: pass (no problematic comments)
-      // Exit code 2: block (problematic comments detected)
+      // Exit codes:
+      // 0 = pass (no problematic comments or not a code file)
+      // 2 = block (problematic comments detected)
+      // other = error (binary issue, parsing error, etc.)
       if (code === 0) {
         resolve(null);
       } else if (code === 2) {
-        // Parse XML output for comments
         const comments = parseCommentOutput(stderr || stdout);
         resolve({ comments });
       } else {
-        // Binary not found or other error - silently skip
+        // Binary error - treat as pass (graceful degradation)
         resolve(null);
       }
     });
 
     child.on("error", () => {
-      // Binary not found or failed to spawn - silently skip
+      // Binary not found or spawn failed - treat as pass
       resolve(null);
     });
 
-    // Send input to checker
     child.stdin?.write(JSON.stringify(input));
     child.stdin?.end();
   });
@@ -111,7 +130,6 @@ async function runCommentChecker(input: CommentCheckerInput): Promise<CommentChe
 function parseCommentOutput(output: string): Array<{ file: string; line: number; text: string }> {
   const comments: Array<{ file: string; line: number; text: string }> = [];
 
-  // Parse XML-like output: <comments file="..."><comment line-number="...">text</comment></comments>
   const commentRegex = /<comment line-number="(\d+)">([^<]+)<\/comment>/g;
   const fileMatch = output.match(/file="([^"]+)"/);
   const file = fileMatch ? fileMatch[1] : "unknown";
@@ -165,10 +183,22 @@ function buildCheckerInput(
 
 export default function commentCheckerExtension(pi: ExtensionAPI) {
   const DEBUG = process.env.PI_COMMENT_CHECKER_DEBUG === "1";
+  const binaryStatus = findBinary();
+  let warnedMissing = false;
 
   function debug(...args: unknown[]) {
     if (DEBUG) {
       console.error("[comment-checker]", ...args);
+    }
+  }
+
+  function warnOnce(ctx: { ui: { notify: (msg: string, type: "warning" | "error" | "info") => void } }) {
+    if (!binaryStatus.found && !warnedMissing) {
+      warnedMissing = true;
+      ctx.ui.notify(
+        "comment-checker: Binary not found. Run /check-comments for setup help.",
+        "warning",
+      );
     }
   }
 
@@ -186,6 +216,14 @@ export default function commentCheckerExtension(pi: ExtensionAPI) {
       return;
     }
 
+    // Warn if binary not found (once per session)
+    warnOnce(ctx);
+
+    if (!binaryStatus.found) {
+      debug(`Skipping check: binary not found (${toolName})`);
+      return;
+    }
+
     const checkerInput = buildCheckerInput(toolName, event.input);
     if (!checkerInput) {
       return;
@@ -193,7 +231,7 @@ export default function commentCheckerExtension(pi: ExtensionAPI) {
 
     debug(`Checking ${toolName} on ${checkerInput.file_path}`);
 
-    const result = await runCommentChecker(checkerInput);
+    const result = await runCommentChecker(checkerInput, binaryStatus.path);
 
     if (result?.comments && result.comments.length > 0) {
       const commentList = result.comments
@@ -225,7 +263,7 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
           ...(event.content || []),
           { type: "text", text: message },
         ],
-        isError: true, // Mark as error to get attention
+        isError: true,
       };
     }
   });
@@ -233,6 +271,14 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
   // Handle apply_patch separately since it has different structure
   pi.on("tool_result", async (event, ctx) => {
     if (event.toolName.toLowerCase() !== "apply_patch") {
+      return;
+    }
+
+    // Warn if binary not found (once per session)
+    warnOnce(ctx);
+
+    if (!binaryStatus.found) {
+      debug("Skipping apply_patch check: binary not found");
       return;
     }
 
@@ -264,7 +310,7 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
         },
       };
 
-      const result = await runCommentChecker(checkerInput);
+      const result = await runCommentChecker(checkerInput, binaryStatus.path);
       if (result?.comments) {
         allComments.push(...result.comments);
       }
@@ -301,15 +347,45 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
     }
   });
 
-  // Register a command to check current file
+  // Register a command to check binary status
   pi.registerCommand("check-comments", {
-    description: "Check current file for unnecessary comments",
+    description: "Check comment-checker status and binary location",
     handler: async (_args, ctx) => {
-      // This would need access to the last tool result or current file
-      // For now, just show status
-      ctx.ui.notify("comment-checker: watching write/edit/multiedit/apply_patch tools", "info");
+      const status = binaryStatus;
+      const message = formatBinaryStatus(status);
+
+      if (!status.found) {
+        const help = `
+${message}
+
+To install the comment-checker binary:
+
+1. Clone and build go-claude-code-comment-checker:
+   git clone https://github.com/code-yeongyu/go-claude-code-comment-checker.git
+   cd go-claude-code-comment-checker
+   go build -o comment-checker ./cmd/comment-checker
+
+2. Or install globally:
+   go install ./cmd/comment-checker@latest
+
+3. Or use Homebrew:
+   brew tap code-yeongyu/tap
+   brew install comment-checker
+`;
+        ctx.ui.notify("comment-checker: Binary not found — see output for help", "error");
+        return {
+          content: [{ type: "text", text: help }],
+          isError: false,
+        };
+      }
+
+      ctx.ui.notify(`comment-checker: ${status.path}`, "info");
+      return {
+        content: [{ type: "text", text: message }],
+        isError: false,
+      };
     },
   });
 
-  debug("comment-checker extension loaded");
+  debug(`Extension loaded. Binary: ${binaryStatus.found ? "found" : "not found"} (${binaryStatus.path})`);
 }
