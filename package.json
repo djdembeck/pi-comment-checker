@@ -30,7 +30,8 @@
     "typescript": "^5.0.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "echo 'No tests configured yet' && exit 0"
   },
   "pi": {
     "extensions": [

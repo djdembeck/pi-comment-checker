@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { accessSync, constants } from "node:fs";
-import { resolve } from "node:path";
+import { delimiter, resolve } from "node:path";
 
 /**
  * Pi extension that integrates go-claude-code-comment-checker
@@ -71,11 +71,25 @@ function findBinary(): BinaryStatus {
   const candidates = getBinaryCandidates();
 
   for (const { path, source } of candidates) {
-    try {
-      accessSync(path, constants.X_OK);
-      return { found: true, path, source };
-    } catch {
-      continue;
+    // For PATH source, manually search through PATH directories
+    if (source === "path" && process.env.PATH) {
+      const pathDirs = process.env.PATH.split(delimiter);
+      for (const dir of pathDirs) {
+        const fullPath = resolve(dir, path);
+        try {
+          accessSync(fullPath, constants.X_OK);
+          return { found: true, path: fullPath, source };
+        } catch {
+          continue;
+        }
+      }
+    } else {
+      try {
+        accessSync(path, constants.X_OK);
+        return { found: true, path, source };
+      } catch {
+        continue;
+      }
     }
   }
 
@@ -97,15 +111,43 @@ async function runCommentChecker(
     let timedOut = false;
 
     // Set up timeout to prevent zombie processes
-    const timeout = setTimeout(() => {
+    let timeout: NodeJS.Timeout | null = null;
+    let graceKillTimer: NodeJS.Timeout | null = null;
+    let resolved = false;
+
+    const cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+      if (graceKillTimer) {
+        clearTimeout(graceKillTimer);
+        graceKillTimer = null;
+      }
+    };
+
+    const resolveOnce = (value: CommentCheckerOutput | null) => {
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+        resolve(value);
+      }
+    };
+
+    // Handle process exit to clean up timers
+    child.once("exit", () => {
+      resolveOnce(null);
+    });
+
+    timeout = setTimeout(() => {
       timedOut = true;
       debugLog(`Binary timed out after ${BINARY_TIMEOUT_MS}ms, killing process`);
       child.kill("SIGTERM");
-      // Force kill after 5s if still running
-      setTimeout(() => {
-        if (!child.killed) {
-          child.kill("SIGKILL");
-        }
+
+      // Grace period: SIGKILL if process hasn't exited
+      graceKillTimer = setTimeout(() => {
+        debugLog("Process still running after SIGTERM, sending SIGKILL");
+        child.kill("SIGKILL");
       }, 5000);
     }, BINARY_TIMEOUT_MS);
 
@@ -118,30 +160,30 @@ async function runCommentChecker(
     });
 
     child.on("close", (code) => {
-      clearTimeout(timeout);
+      cleanup();
 
       // Exit codes:
       // 0 = pass (no problematic comments or not a code file)
       // 2 = block (problematic comments detected)
       // 1 or other = error (binary issue, parsing error, invalid input)
       if (code === 0) {
-        resolve(null);
+        resolveOnce(null);
       } else if (code === 2) {
         const comments = parseCommentOutput(stderr || stdout);
-        resolve({ comments });
+        resolveOnce({ comments });
       } else {
         // Binary error - log when debug enabled, treat as pass (graceful degradation)
         if (!timedOut) {
           debugLog(`Binary exited with code ${code} (treating as pass): ${stderr || stdout}`);
         }
-        resolve(null);
+        resolveOnce(null);
       }
     });
 
     child.on("error", (err) => {
-      clearTimeout(timeout);
+      cleanup();
       debugLog(`Failed to spawn binary: ${err.message}`);
-      resolve(null);
+      resolveOnce(null);
     });
 
     child.stdin?.write(JSON.stringify(input));
@@ -235,7 +277,11 @@ function isValidFileChange(
 ): file is { filePath: string; movePath?: string; after: string } {
   if (typeof file !== "object" || file === null) return false;
   const f = file as Record<string, unknown>;
-  return typeof f.filePath === "string" && typeof f.after === "string";
+  return (
+    typeof f.filePath === "string" &&
+    typeof f.after === "string" &&
+    (f.movePath === undefined || typeof f.movePath === "string")
+  );
 }
 
 export default function commentCheckerExtension(pi: ExtensionAPI) {
@@ -326,6 +372,11 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
   // Handle apply_patch separately since it has different structure
   pi.on("tool_result", async (event, ctx) => {
     if (event.toolName.toLowerCase() !== "apply_patch") {
+      return;
+    }
+
+    // Skip if tool errored
+    if (event.isError) {
       return;
     }
 

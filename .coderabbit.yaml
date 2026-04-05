@@ -37,7 +37,7 @@ reviews:
       mode: 'error'
     title:
       mode: 'error'
-      requirements: 'Use conventional commits format: type(scope): description'
+      requirements: 'Use conventional commits format: type(scope)?: description (scope is optional)'
     issue_assessment:
       mode: 'warning'
     custom_checks:
