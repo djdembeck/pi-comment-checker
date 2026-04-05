@@ -1,7 +1,9 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
     branches: [main]
 
 # Concurrency: Skip duplicate runs
@@ -15,6 +17,7 @@ permissions:
 jobs:
   release:
     name: Create Release
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -151,7 +154,6 @@ jobs:
           echo "Created and pushed tag: $NEW_VERSION"
 
       - name: Create GitHub Release
-        if: steps.check_tag.outputs.has_tag == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.new_version }}
@@ -164,7 +166,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Summary
-        if: steps.check_tag.outputs.has_tag == 'false'
         run: |
           echo "### 🎉 Release Created!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

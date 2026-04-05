@@ -134,11 +134,6 @@ async function runCommentChecker(
       }
     };
 
-    // Handle process exit to clean up timers
-    child.once("exit", () => {
-      resolveOnce(null);
-    });
-
     timeout = setTimeout(() => {
       timedOut = true;
       debugLog(`Binary timed out after ${BINARY_TIMEOUT_MS}ms, killing process`);
@@ -286,7 +281,6 @@ function isValidFileChange(
 
 export default function commentCheckerExtension(pi: ExtensionAPI) {
   const DEBUG = process.env.PI_COMMENT_CHECKER_DEBUG === "1";
-  const binaryStatus = findBinary();
   let warnedMissing = false;
 
   function debug(...args: unknown[]) {
@@ -295,10 +289,13 @@ export default function commentCheckerExtension(pi: ExtensionAPI) {
     }
   }
 
-  function warnOnce(ctx: {
-    ui: { notify: (msg: string, type: "warning" | "error" | "info") => void };
-  }) {
-    if (!binaryStatus.found && !warnedMissing) {
+  function warnOnce(
+    ctx: {
+      ui: { notify: (msg: string, type: "warning" | "error" | "info") => void };
+    },
+    status: BinaryStatus,
+  ) {
+    if (!status.found && !warnedMissing) {
       warnedMissing = true;
       ctx.ui.notify(
         "comment-checker: Binary not found. Run /check-comments for setup help.",
@@ -322,9 +319,10 @@ export default function commentCheckerExtension(pi: ExtensionAPI) {
     }
 
     // Warn if binary not found (once per session)
-    warnOnce(ctx);
+    const status = findBinary();
+    warnOnce(ctx, status);
 
-    if (!binaryStatus.found) {
+    if (!status.found) {
       debug(`Skipping check: binary not found (${toolName})`);
       return;
     }
@@ -337,7 +335,7 @@ export default function commentCheckerExtension(pi: ExtensionAPI) {
 
     debug(`Checking ${toolName} on ${checkerInput.file_path}`);
 
-    const result = await runCommentChecker(checkerInput, binaryStatus.path, debug);
+    const result = await runCommentChecker(checkerInput, status.path, debug);
 
     if (result?.comments && result.comments.length > 0) {
       const commentList = result.comments.map((c) => `  Line ${c.line}: ${c.text}`).join("\n");
@@ -381,9 +379,10 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
     }
 
     // Warn if binary not found (once per session)
-    warnOnce(ctx);
+    const status = findBinary();
+    warnOnce(ctx, status);
 
-    if (!binaryStatus.found) {
+    if (!status.found) {
       debug("Skipping apply_patch check: binary not found");
       return;
     }
@@ -416,7 +415,7 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
         },
       };
 
-      const result = await runCommentChecker(checkerInput, binaryStatus.path, debug);
+      const result = await runCommentChecker(checkerInput, status.path, debug);
       if (result?.comments) {
         allComments.push(...result.comments);
       }
@@ -452,7 +451,7 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
   pi.registerCommand("check-comments", {
     description: "Check comment-checker status and binary location",
     handler: async (_args, ctx) => {
-      const status = binaryStatus;
+      const status = findBinary();
 
       if (!status.found) {
         const help = `Binary not found. Searched:
@@ -487,7 +486,8 @@ Download prebuilt:
     },
   });
 
+  const initialStatus = findBinary();
   debug(
-    `Extension loaded. Binary: ${binaryStatus.found ? "found" : "not found"} (${binaryStatus.path})`,
+    `Extension loaded. Binary: ${initialStatus.found ? "found" : "not found"} (${initialStatus.path})`,
   );
 }
