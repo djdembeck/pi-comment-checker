@@ -42,9 +42,14 @@ interface BinaryStatus {
   source: "sibling" | "global" | "path" | "not-found";
 }
 
-// Timeout for comment-checker binary execution (ms)
+/** Timeout for comment-checker binary execution (ms) */
 const BINARY_TIMEOUT_MS = 30000;
 
+/**
+ * Returns an array of candidate binary paths to search for the comment-checker,
+ * ordered by search priority: sibling projects, user-local installs, system paths.
+ * @returns Array of path candidates with their source classification
+ */
 function getBinaryCandidates(): Array<{ path: string; source: BinaryStatus["source"] }> {
   return [
     // Sibling project (where go-claude-code-comment-checker was cloned)
@@ -67,6 +72,11 @@ function getBinaryCandidates(): Array<{ path: string; source: BinaryStatus["sour
   ];
 }
 
+/**
+ * Searches for the comment-checker binary in common locations.
+ * Checks sibling project directories, user-local paths, system paths, and PATH environment.
+ * @returns BinaryStatus indicating if found, the full path, and source location
+ */
 function findBinary(): BinaryStatus {
   const candidates = getBinaryCandidates();
 
@@ -96,6 +106,14 @@ function findBinary(): BinaryStatus {
   return { found: false, path: "comment-checker", source: "not-found" };
 }
 
+/**
+ * Executes the comment-checker binary with the given input and returns parsed output.
+ * Handles timeout protection (30s), graceful degradation on errors, and process cleanup.
+ * @param input - The comment checker input data with tool name, file path, and content
+ * @param binaryPath - Full path to the comment-checker binary
+ * @param debugLog - Debug logging function for troubleshooting
+ * @returns Promise resolving to parsed output or null on error/timeout/no comments
+ */
 async function runCommentChecker(
   input: CommentCheckerInput,
   binaryPath: string,
@@ -146,15 +164,15 @@ async function runCommentChecker(
       }, 5000);
     }, BINARY_TIMEOUT_MS);
 
-    child.stdout?.on("data", (data) => {
+    child.stdout?.on("data", (data: Buffer) => {
       stdout += data.toString();
     });
 
-    child.stderr?.on("data", (data) => {
+    child.stderr?.on("data", (data: Buffer) => {
       stderr += data.toString();
     });
 
-    child.on("close", (code) => {
+    child.on("close", (code: number | null) => {
       cleanup();
 
       // Exit codes:
@@ -175,7 +193,7 @@ async function runCommentChecker(
       }
     });
 
-    child.on("error", (err) => {
+    child.on("error", (err: Error) => {
       cleanup();
       debugLog(`Failed to spawn binary: ${err.message}`);
       resolveOnce(null);
@@ -186,6 +204,12 @@ async function runCommentChecker(
   });
 }
 
+/**
+ * Parses XML-like output from the comment-checker binary into structured comment data.
+ * Extracts file path from comments element and line numbers/text from comment elements.
+ * @param output - Raw stdout/stderr output from the comment-checker binary
+ * @returns Array of parsed comments with file path, line number, and comment text
+ */
 export function parseCommentOutput(output: string): Array<{ file: string; line: number; text: string }> {
   const comments: Array<{ file: string; line: number; text: string }> = [];
 
@@ -214,15 +238,32 @@ export function parseCommentOutput(output: string): Array<{ file: string; line: 
   return comments;
 }
 
+/**
+ * Safely extracts a string argument from an object, returning undefined if not a string.
+ * @param name - Property name to extract from args
+ * @param args - Object containing potential arguments
+ * @returns The string value if present and valid, otherwise undefined
+ */
 export function getStringArg(name: string, args: Record<string, unknown>): string | undefined {
   const value = args[name];
   return typeof value === "string" ? value : undefined;
 }
 
+/**
+ * Extracts a file path from tool arguments, checking multiple possible key names.
+ * Priority: filePath > file_path > path (handles both camelCase and snake_case)
+ * @param args - Tool input arguments object
+ * @returns The file path string if found, otherwise undefined
+ */
 export function extractFilePath(args: Record<string, unknown>): string | undefined {
   return getStringArg("filePath", args) ?? getStringArg("file_path", args) ?? getStringArg("path", args);
 }
 
+/**
+ * Type guard to validate that an object is a valid edit with required string properties.
+ * @param edit - Value to validate as an edit object
+ * @returns True if edit has both old_string and new_string as strings
+ */
 export function isValidEdit(
   edit: unknown,
 ): edit is { old_string: string; new_string: string } {
@@ -231,6 +272,13 @@ export function isValidEdit(
   return typeof e.old_string === "string" && typeof e.new_string === "string";
 }
 
+/**
+ * Builds the input structure for the comment-checker binary based on tool name and arguments.
+ * Supports write, edit, and multiedit tools with appropriate field mapping.
+ * @param toolName - Name of the Pi tool (write, edit, or multiedit)
+ * @param args - Tool input arguments containing file path and content/edit data
+ * @returns Structured input for comment-checker, or null if input is invalid
+ */
 export function buildCheckerInput(
   toolName: string,
   args: Record<string, unknown>,
@@ -273,6 +321,12 @@ export function buildCheckerInput(
   };
 }
 
+/**
+ * Type guard to validate file change metadata from apply_patch tool results.
+ * Checks for required filePath and after properties, with optional movePath.
+ * @param file - Value to validate as a file change object
+ * @returns True if file has valid structure for comment checking
+ */
 export function isValidFileChange(
   file: unknown,
 ): file is { filePath: string; movePath?: string; after: string } {
@@ -285,6 +339,12 @@ export function isValidFileChange(
   );
 }
 
+/**
+ * Pi extension entry point that registers event handlers to intercept and validate file modifications.
+ * Hooks into write, edit, multiedit, and apply_patch tools to check for AI-generated comments.
+ * Provides a /check-comments command for binary status verification and setup help.
+ * @param pi - The Pi ExtensionAPI for registering handlers and commands
+ */
 export default function commentCheckerExtension(pi: ExtensionAPI) {
   const DEBUG = process.env.PI_COMMENT_CHECKER_DEBUG === "1";
   let warnedMissing = false;

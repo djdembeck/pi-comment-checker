@@ -162,7 +162,6 @@ jobs:
           tag_name: ${{ steps.version.outputs.new_version || steps.check_tag.outputs.existing_tag }}
           name: Release ${{ steps.version.outputs.new_version || steps.check_tag.outputs.existing_tag }}
           body: ${{ steps.changelog.outputs.changelog || '' }}
-          existing_tag: ${{ steps.check_tag.outputs.existing_tag }}
           draft: false
           prerelease: false
           generate_release_notes: false
