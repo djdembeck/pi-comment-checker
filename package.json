@@ -1,0 +1,43 @@
+{
+  "name": "@djdembeck/pi-comment-checker",
+  "version": "0.1.0",
+  "description": "Pi extension that enforces self-documenting code by detecting and blocking unnecessary comments",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "comment-checker",
+    "self-documenting-code",
+    "code-quality"
+  ],
+  "license": "MIT",
+  "author": "djdembeck",
+  "type": "module",
+  "homepage": "https://github.com/djdembeck/pi-comment-checker-extension#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/djdembeck/pi-comment-checker-extension"
+  },
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
