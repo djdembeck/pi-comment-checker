@@ -60,7 +60,9 @@ jobs:
           echo "$SUBJECTS"
 
           BUMP="patch"
-          if echo "$COMMITS" | grep -qiE "BREAKING CHANGE|^[a-z]+(\([a-z0-9-]+\))?!:"; then
+          if echo "$COMMITS" | grep -qiE "BREAKING CHANGE"; then
+            BUMP="major"
+          elif echo "$SUBJECTS" | grep -qiE "^[a-z]+(\([a-z0-9-]+\))?!:"; then
             BUMP="major"
           elif echo "$SUBJECTS" | grep -qiE "^feat(\(|!|:)"; then
             BUMP="minor"

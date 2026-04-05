@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
+import { homedir } from "node:os";
 
 /**
  * Pi extension that integrates go-claude-code-comment-checker
@@ -61,9 +62,11 @@ function getBinaryCandidates(): Array<{ path: string; source: BinaryStatus["sour
       path: resolve(process.cwd(), "../../go-claude-code-comment-checker/comment-checker"),
       source: "sibling" as const,
     },
-    // User-local install locations (preferred over system)
-    { path: `${process.env.HOME}/.local/bin/comment-checker`, source: "global" as const },
-    { path: `${process.env.HOME}/go/bin/comment-checker`, source: "global" as const },
+    // User-local install locations (preferred over system) - only add if HOME is defined
+    ...(process.env.HOME ? [
+      { path: `${process.env.HOME}/.local/bin/comment-checker`, source: "global" as const },
+      { path: `${process.env.HOME}/go/bin/comment-checker`, source: "global" as const },
+    ] : []),
     // System install locations
     { path: "/usr/local/bin/comment-checker", source: "global" as const },
     { path: "/usr/bin/comment-checker", source: "global" as const },
@@ -306,10 +309,10 @@ export function buildCheckerInput(
     }
     toolInput.content = content;
   } else if (toolName === "edit") {
-    const newStr = (args.newString ?? args.new_string) as string | undefined;
-    const oldStr = (args.oldString ?? args.old_string) as string | undefined;
+    const newStr = getStringArg("newString", args) ?? getStringArg("new_string", args);
+    const oldStr = getStringArg("oldString", args) ?? getStringArg("old_string", args);
     // Validate strings exist before passing
-    if (typeof newStr !== "string" || typeof oldStr !== "string") {
+    if (newStr === undefined || oldStr === undefined) {
       return null;
     }
     toolInput.new_string = newStr;
