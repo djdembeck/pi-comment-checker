@@ -214,8 +214,13 @@ export function parseCommentOutput(output: string): Array<{ file: string; line: 
   return comments;
 }
 
+export function getStringArg(name: string, args: Record<string, unknown>): string | undefined {
+  const value = args[name];
+  return typeof value === "string" ? value : undefined;
+}
+
 export function extractFilePath(args: Record<string, unknown>): string | undefined {
-  return (args.filePath as string) ?? (args.file_path as string) ?? (args.path as string);
+  return getStringArg("filePath", args) ?? getStringArg("file_path", args) ?? getStringArg("path", args);
 }
 
 export function isValidEdit(
@@ -238,7 +243,8 @@ export function buildCheckerInput(
   };
 
   if (toolName === "write") {
-    toolInput.content = (args.content as string) ?? "";
+    const content = getStringArg("content", args);
+    toolInput.content = content ?? "";
   } else if (toolName === "edit") {
     const newStr = (args.newString ?? args.new_string) as string | undefined;
     const oldStr = (args.oldString ?? args.old_string) as string | undefined;
