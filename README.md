@@ -32,6 +32,7 @@ go install github.com/code-yeongyu/go-claude-code-comment-checker/cmd/comment-ch
 ```
 
 Verify it's in your PATH:
+
 ```bash
 comment-checker --help
 ```
@@ -111,7 +112,7 @@ The extension auto-loads when Pi starts. It will:
 ```typescript
 // Extension subscribes to tool_result events
 pi.on("tool_result", async (event, ctx) => {
-  // Only check file modification tools
+  // Only check file modification tools (write/edit/multiedit)
   if (!["write", "edit", "multiedit"].includes(toolName)) return;
 
   // Build checker input
@@ -127,6 +128,15 @@ pi.on("tool_result", async (event, ctx) => {
       isError: true,
     };
   }
+});
+
+// apply_patch is handled separately due to different metadata structure
+pi.on("tool_result", async (event, ctx) => {
+  if (event.toolName.toLowerCase() !== "apply_patch") return;
+  
+  // Extract file changes from apply_patch metadata
+  const files = event.details?.metadata?.files ?? [];
+  // ... validate and check each file's "after" content
 });
 ```
 
@@ -147,6 +157,7 @@ pi-comment-checker/
 ## Supported Languages
 
 30+ languages via tree-sitter:
+
 - TypeScript/JavaScript/JSX/TSX
 - Python
 - Go
@@ -162,6 +173,7 @@ pi-comment-checker/
 ### Extension not loading
 
 Check Pi's extension loading:
+
 ```bash
 # Test load directly
 pi -e /path/to/pi-comment-checker/extensions/index.ts
@@ -172,6 +184,7 @@ pi -e /path/to/pi-comment-checker/extensions/index.ts
 ### Binary not found
 
 Verify the binary exists and is executable:
+
 ```bash
 ls -la ../go-claude-code-comment-checker/comment-checker
 ../go-claude-code-comment-checker/comment-checker --help
@@ -180,6 +193,7 @@ ls -la ../go-claude-code-comment-checker/comment-checker
 ### False positives
 
 If you encounter legitimate comments being flagged:
+
 1. Consider if the code could be self-documenting without the comment
 2. Use BDD format (`// given`, `// when`, `// then`) for test comments
 3. For linter directives, ensure they follow standard formats

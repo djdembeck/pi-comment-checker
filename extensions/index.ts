@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ToolResult } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { resolve } from "node:path";
@@ -42,16 +42,26 @@ interface BinaryStatus {
   source: "sibling" | "global" | "path" | "not-found";
 }
 
+// Timeout for comment-checker binary execution (ms)
+const BINARY_TIMEOUT_MS = 30000;
+
 function getBinaryCandidates(): Array<{ path: string; source: BinaryStatus["source"] }> {
   return [
     // Sibling project (where go-claude-code-comment-checker was cloned)
-    { path: resolve(process.cwd(), "../go-claude-code-comment-checker/comment-checker"), source: "sibling" as const },
-    { path: resolve(process.cwd(), "../../go-claude-code-comment-checker/comment-checker"), source: "sibling" as const },
-    // Global install locations
-    { path: "/usr/local/bin/comment-checker", source: "global" as const },
-    { path: "/usr/bin/comment-checker", source: "global" as const },
+    {
+      path: resolve(process.cwd(), "../go-claude-code-comment-checker/comment-checker"),
+      source: "sibling" as const,
+    },
+    {
+      path: resolve(process.cwd(), "../../go-claude-code-comment-checker/comment-checker"),
+      source: "sibling" as const,
+    },
+    // User-local install locations (preferred over system)
     { path: `${process.env.HOME}/.local/bin/comment-checker`, source: "global" as const },
     { path: `${process.env.HOME}/go/bin/comment-checker`, source: "global" as const },
+    // System install locations
+    { path: "/usr/local/bin/comment-checker", source: "global" as const },
+    { path: "/usr/bin/comment-checker", source: "global" as const },
     // Will try PATH lookup
     { path: "comment-checker", source: "path" as const },
   ];
@@ -72,18 +82,10 @@ function findBinary(): BinaryStatus {
   return { found: false, path: "comment-checker", source: "not-found" };
 }
 
-function formatBinaryStatus(status: BinaryStatus): string {
-  if (status.found) {
-    return `✓ Binary found (${status.source}): ${status.path}`;
-  }
-  return `✗ Binary not found. Searched:\n${getBinaryCandidates()
-    .map((c) => `  - ${c.path}`)
-    .join("\n")}`;
-}
-
 async function runCommentChecker(
   input: CommentCheckerInput,
   binaryPath: string,
+  debugLog: (...args: unknown[]) => void,
 ): Promise<CommentCheckerOutput | null> {
   return new Promise((resolve) => {
     const child = spawn(binaryPath, [], {
@@ -92,6 +94,20 @@ async function runCommentChecker(
 
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+
+    // Set up timeout to prevent zombie processes
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      debugLog(`Binary timed out after ${BINARY_TIMEOUT_MS}ms, killing process`);
+      child.kill("SIGTERM");
+      // Force kill after 5s if still running
+      setTimeout(() => {
+        if (!child.killed) {
+          child.kill("SIGKILL");
+        }
+      }, 5000);
+    }, BINARY_TIMEOUT_MS);
 
     child.stdout?.on("data", (data) => {
       stdout += data.toString();
@@ -102,23 +118,29 @@ async function runCommentChecker(
     });
 
     child.on("close", (code) => {
+      clearTimeout(timeout);
+
       // Exit codes:
       // 0 = pass (no problematic comments or not a code file)
       // 2 = block (problematic comments detected)
-      // other = error (binary issue, parsing error, etc.)
+      // 1 or other = error (binary issue, parsing error, invalid input)
       if (code === 0) {
         resolve(null);
       } else if (code === 2) {
         const comments = parseCommentOutput(stderr || stdout);
         resolve({ comments });
       } else {
-        // Binary error - treat as pass (graceful degradation)
+        // Binary error - log when debug enabled, treat as pass (graceful degradation)
+        if (!timedOut) {
+          debugLog(`Binary exited with code ${code} (treating as pass): ${stderr || stdout}`);
+        }
         resolve(null);
       }
     });
 
-    child.on("error", () => {
-      // Binary not found or spawn failed - treat as pass
+    child.on("error", (err) => {
+      clearTimeout(timeout);
+      debugLog(`Failed to spawn binary: ${err.message}`);
       resolve(null);
     });
 
@@ -130,15 +152,24 @@ async function runCommentChecker(
 function parseCommentOutput(output: string): Array<{ file: string; line: number; text: string }> {
   const comments: Array<{ file: string; line: number; text: string }> = [];
 
-  const commentRegex = /<comment line-number="(\d+)">([^<]+)<\/comment>/g;
-  const fileMatch = output.match(/file="([^"]+)"/);
+  // Parse XML-like output: <comments file="..."><comment line-number="...">text</comment></comments>
+  // Uses lazy matching for comment text to handle nested content
+  const commentRegex = /<comment\s+line-number="(\d+)">([^]*?)<\/comment>/g;
+  const fileRegex = /<comments[^>]*\s+file="([^"]*)"/;
+
+  const fileMatch = output.match(fileRegex);
   const file = fileMatch ? fileMatch[1] : "unknown";
 
   let match;
   while ((match = commentRegex.exec(output)) !== null) {
+    const lineNum = parseInt(match[1], 10);
+    // Skip invalid line numbers
+    if (isNaN(lineNum) || lineNum < 1) {
+      continue;
+    }
     comments.push({
       file,
-      line: parseInt(match[1], 10),
+      line: lineNum,
       text: match[2].trim(),
     });
   }
@@ -147,11 +178,15 @@ function parseCommentOutput(output: string): Array<{ file: string; line: number;
 }
 
 function extractFilePath(args: Record<string, unknown>): string | undefined {
-  return (
-    (args.filePath as string) ??
-    (args.file_path as string) ??
-    (args.path as string)
-  );
+  return (args.filePath as string) ?? (args.file_path as string) ?? (args.path as string);
+}
+
+function isValidEdit(
+  edit: unknown,
+): edit is { old_string: string; new_string: string } {
+  if (typeof edit !== "object" || edit === null) return false;
+  const e = edit as Record<string, unknown>;
+  return typeof e.old_string === "string" && typeof e.new_string === "string";
 }
 
 function buildCheckerInput(
@@ -168,10 +203,24 @@ function buildCheckerInput(
   if (toolName === "write") {
     toolInput.content = (args.content as string) ?? "";
   } else if (toolName === "edit") {
-    toolInput.new_string = (args.newString ?? args.new_string) as string;
-    toolInput.old_string = (args.oldString ?? args.old_string) as string;
+    const newStr = (args.newString ?? args.new_string) as string | undefined;
+    const oldStr = (args.oldString ?? args.old_string) as string | undefined;
+    // Validate strings exist before passing
+    if (typeof newStr !== "string" || typeof oldStr !== "string") {
+      return null;
+    }
+    toolInput.new_string = newStr;
+    toolInput.old_string = oldStr;
   } else if (toolName === "multiedit") {
-    toolInput.edits = (args.edits as Array<{ old_string: string; new_string: string }>) ?? [];
+    const edits = args.edits;
+    if (!Array.isArray(edits)) {
+      return null;
+    }
+    // Validate each edit has required properties
+    if (!edits.every(isValidEdit)) {
+      return null;
+    }
+    toolInput.edits = edits;
   }
 
   return {
@@ -179,6 +228,14 @@ function buildCheckerInput(
     file_path: filePath,
     tool_input: toolInput,
   };
+}
+
+function isValidFileChange(
+  file: unknown,
+): file is { filePath: string; movePath?: string; after: string } {
+  if (typeof file !== "object" || file === null) return false;
+  const f = file as Record<string, unknown>;
+  return typeof f.filePath === "string" && typeof f.after === "string";
 }
 
 export default function commentCheckerExtension(pi: ExtensionAPI) {
@@ -192,7 +249,9 @@ export default function commentCheckerExtension(pi: ExtensionAPI) {
     }
   }
 
-  function warnOnce(ctx: { ui: { notify: (msg: string, type: "warning" | "error" | "info") => void } }) {
+  function warnOnce(ctx: {
+    ui: { notify: (msg: string, type: "warning" | "error" | "info") => void };
+  }) {
     if (!binaryStatus.found && !warnedMissing) {
       warnedMissing = true;
       ctx.ui.notify(
@@ -226,17 +285,16 @@ export default function commentCheckerExtension(pi: ExtensionAPI) {
 
     const checkerInput = buildCheckerInput(toolName, event.input);
     if (!checkerInput) {
+      debug(`Skipping check: could not build checker input for ${toolName}`);
       return;
     }
 
     debug(`Checking ${toolName} on ${checkerInput.file_path}`);
 
-    const result = await runCommentChecker(checkerInput, binaryStatus.path);
+    const result = await runCommentChecker(checkerInput, binaryStatus.path, debug);
 
     if (result?.comments && result.comments.length > 0) {
-      const commentList = result.comments
-        .map((c) => `  Line ${c.line}: ${c.text}`)
-        .join("\n");
+      const commentList = result.comments.map((c) => `  Line ${c.line}: ${c.text}`).join("\n");
 
       const message = `
 ⚠️  AI Comment Detected — Self-Documenting Code Required
@@ -259,10 +317,7 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
 
       // Modify result to show warning
       return {
-        content: [
-          ...(event.content || []),
-          { type: "text", text: message },
-        ],
+        content: [...(event.content || []), { type: "text", text: message }],
         isError: true,
       };
     }
@@ -283,21 +338,21 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
     }
 
     // apply_patch metadata contains the file changes
-    const metadata = event.details?.metadata;
+    const metadata = (event.details as { metadata?: { files?: unknown[] } } | undefined)?.metadata;
     if (!metadata?.files || !Array.isArray(metadata.files)) {
       return;
     }
 
-    const files: Array<{
-      filePath: string;
-      movePath?: string;
-      before: string;
-      after: string;
-    }> = metadata.files;
+    // Validate each file entry has required properties
+    const validFiles = metadata.files.filter(isValidFileChange);
+    if (validFiles.length === 0) {
+      debug("No valid file changes found in apply_patch metadata");
+      return;
+    }
 
     const allComments: Array<{ file: string; line: number; text: string }> = [];
 
-    for (const file of files) {
+    for (const file of validFiles) {
       // Skip deleted files
       if (!file.after) continue;
 
@@ -310,16 +365,14 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
         },
       };
 
-      const result = await runCommentChecker(checkerInput, binaryStatus.path);
+      const result = await runCommentChecker(checkerInput, binaryStatus.path, debug);
       if (result?.comments) {
         allComments.push(...result.comments);
       }
     }
 
     if (allComments.length > 0) {
-      const commentList = allComments
-        .map((c) => `  ${c.file}:${c.line}: ${c.text}`)
-        .join("\n");
+      const commentList = allComments.map((c) => `  ${c.file}:${c.line}: ${c.text}`).join("\n");
 
       const message = `
 ⚠️  AI Comment Detected — Self-Documenting Code Required
@@ -338,10 +391,7 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
       ctx.ui.notify("AI comment detected in apply_patch — see tool output", "warning");
 
       return {
-        content: [
-          ...(event.content || []),
-          { type: "text", text: message },
-        ],
+        content: [...(event.content || []), { type: "text", text: message }],
         isError: true,
       };
     }
@@ -352,11 +402,10 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
     description: "Check comment-checker status and binary location",
     handler: async (_args, ctx) => {
       const status = binaryStatus;
-      const message = formatBinaryStatus(status);
 
       if (!status.found) {
-        const help = `
-${message}
+        const help = `Binary not found. Searched:
+${getBinaryCandidates().map((c) => `  - ${c.path}`).join("\n")}
 
 To install the comment-checker binary:
 
@@ -378,20 +427,16 @@ Build from source:
 Download prebuilt:
    https://github.com/code-yeongyu/go-claude-code-comment-checker/releases
 `;
-        ctx.ui.notify("comment-checker: Binary not found — see output for help", "error");
-        return {
-          content: [{ type: "text", text: help }],
-          isError: false,
-        };
+        ctx.ui.notify("comment-checker: Binary not found — check console for help", "error");
+        console.error(help);
+        return;
       }
 
       ctx.ui.notify(`comment-checker: ${status.path} (${status.source})`, "info");
-      return {
-        content: [{ type: "text", text: message }],
-        isError: false,
-      };
     },
   });
 
-  debug(`Extension loaded. Binary: ${binaryStatus.found ? "found" : "not found"} (${binaryStatus.path})`);
+  debug(
+    `Extension loaded. Binary: ${binaryStatus.found ? "found" : "not found"} (${binaryStatus.path})`,
+  );
 }
