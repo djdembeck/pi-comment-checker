@@ -186,7 +186,7 @@ async function runCommentChecker(
   });
 }
 
-function parseCommentOutput(output: string): Array<{ file: string; line: number; text: string }> {
+export function parseCommentOutput(output: string): Array<{ file: string; line: number; text: string }> {
   const comments: Array<{ file: string; line: number; text: string }> = [];
 
   // Parse XML-like output: <comments file="..."><comment line-number="...">text</comment></comments>
@@ -214,11 +214,11 @@ function parseCommentOutput(output: string): Array<{ file: string; line: number;
   return comments;
 }
 
-function extractFilePath(args: Record<string, unknown>): string | undefined {
+export function extractFilePath(args: Record<string, unknown>): string | undefined {
   return (args.filePath as string) ?? (args.file_path as string) ?? (args.path as string);
 }
 
-function isValidEdit(
+export function isValidEdit(
   edit: unknown,
 ): edit is { old_string: string; new_string: string } {
   if (typeof edit !== "object" || edit === null) return false;
@@ -226,7 +226,7 @@ function isValidEdit(
   return typeof e.old_string === "string" && typeof e.new_string === "string";
 }
 
-function buildCheckerInput(
+export function buildCheckerInput(
   toolName: string,
   args: Record<string, unknown>,
 ): CommentCheckerInput | null {
@@ -267,7 +267,7 @@ function buildCheckerInput(
   };
 }
 
-function isValidFileChange(
+export function isValidFileChange(
   file: unknown,
 ): file is { filePath: string; movePath?: string; after: string } {
   if (typeof file !== "object" || file === null) return false;
