@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
 
 /**
@@ -88,7 +88,9 @@ function findBinary(): BinaryStatus {
         const fullPath = resolve(dir, path);
         try {
           accessSync(fullPath, constants.X_OK);
-          return { found: true, path: fullPath, source };
+          if (statSync(fullPath).isFile()) {
+            return { found: true, path: fullPath, source };
+          }
         } catch {
           continue;
         }
@@ -96,7 +98,9 @@ function findBinary(): BinaryStatus {
     } else {
       try {
         accessSync(path, constants.X_OK);
-        return { found: true, path, source };
+        if (statSync(path).isFile()) {
+          return { found: true, path, source };
+        }
       } catch {
         continue;
       }
@@ -182,8 +186,13 @@ async function runCommentChecker(
       if (code === 0) {
         resolveOnce(null);
       } else if (code === 2) {
-        const comments = parseCommentOutput(stderr || stdout);
-        resolveOnce({ comments });
+        const comments = parseCommentOutput(stderr + '\n' + stdout);
+        if (!comments || comments.length === 0) {
+          debugLog('Comment-checker returned exit code 2 but with no comments, treating as fail');
+          resolveOnce(null);
+        } else {
+          resolveOnce({ comments });
+        }
       } else {
         // Binary error - log when debug enabled, treat as pass (graceful degradation)
         if (!timedOut) {
@@ -292,7 +301,10 @@ export function buildCheckerInput(
 
   if (toolName === "write") {
     const content = getStringArg("content", args);
-    toolInput.content = content ?? "";
+    if (content === undefined) {
+      return null;
+    }
+    toolInput.content = content;
   } else if (toolName === "edit") {
     const newStr = (args.newString ?? args.new_string) as string | undefined;
     const oldStr = (args.oldString ?? args.old_string) as string | undefined;

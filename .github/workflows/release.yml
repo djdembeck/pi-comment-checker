@@ -172,6 +172,6 @@ jobs:
         run: |
           echo "### 🎉 Release Created!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** ${{ steps.version.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Bump Type:** ${{ steps.bump.outputs.bump_type }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Previous:** ${{ steps.get_tag.outputs.latest_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.version.outputs.new_version || steps.check_tag.outputs.existing_tag || '(already tagged)' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Bump Type:** ${{ steps.bump.outputs.bump_type || '(skipped)' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Previous:** ${{ steps.get_tag.outputs.latest_tag || '(skipped)' }}" >> $GITHUB_STEP_SUMMARY
