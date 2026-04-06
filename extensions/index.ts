@@ -2,7 +2,6 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
-import { homedir } from "node:os";
 
 /**
  * Pi extension that integrates go-claude-code-comment-checker
