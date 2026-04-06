@@ -12,10 +12,10 @@
   "license": "MIT",
   "author": "djdembeck",
   "type": "module",
-  "homepage": "https://github.com/djdembeck/pi-comment-checker-extension#readme",
+  "homepage": "https://github.com/djdembeck/pi-comment-checker#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/djdembeck/pi-comment-checker-extension"
+    "url": "https://github.com/djdembeck/pi-comment-checker"
   },
   "files": [
     "extensions",
@@ -27,10 +27,14 @@
     "@mariozechner/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "typescript": "^5.0.0"
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.2"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "pi": {
     "extensions": [
