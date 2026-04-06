@@ -1,5 +1,5 @@
 {
-  "name": "@djdembeck/pi-comment-checker",
+  "name": "pi-comment-checker",
   "version": "0.1.0",
   "description": "Pi extension that enforces self-documenting code by detecting and blocking unnecessary comments",
   "keywords": [
@@ -18,8 +18,8 @@
     "url": "https://github.com/djdembeck/pi-comment-checker"
   },
   "files": [
-    "extensions",
-    "src",
+    "extensions/**/*.ts",
+    "!extensions/**/*.test.ts",
     "README.md",
     "LICENSE"
   ],

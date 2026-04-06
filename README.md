@@ -1,4 +1,4 @@
-# @djdembeck/pi-comment-checker
+# pi-comment-checker
 
 Pi extension that enforces self-documenting code by warning when unnecessary comments are written. Integrates [go-claude-code-comment-checker](https://github.com/code-yeongyu/go-claude-code-comment-checker).
 
@@ -26,7 +26,7 @@ Verify: `comment-checker --help`
 ### 2. Install the Pi Extension
 
 ```bash
-pi install git:github.com/djdembeck/pi-comment-checker
+pi install pi-comment-checker
 ```
 
 <details>
