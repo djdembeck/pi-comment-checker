@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { accessSync, constants, readdirSync, readFileSync, statSync } from "node:fs";
-import { delimiter, extname, join, resolve } from "node:path";
+import { delimiter, extname, join, parse, resolve } from "node:path";
 
 /**
  * Pi extension that integrates go-claude-code-comment-checker
@@ -478,6 +478,10 @@ export function parseGitignorePattern(line: string): GitignorePattern | null {
  * @returns RegExp for matching
  */
 function globToRegex(glob: string, anchored: boolean): RegExp {
+  // Patterns containing / (excluding trailing slash) must be anchored to gitignore root
+  const hasSlash = glob.length > 1 && glob.includes("/");
+  const effectiveAnchored = anchored || hasSlash;
+
   let regex = "";
   let i = 0;
 
@@ -506,18 +510,26 @@ function globToRegex(glob: string, anchored: boolean): RegExp {
       // Handle edge case: []abc] or []] - first ] is literal, not closing
       let j = i + 1;
       const content: string[] = [];
-      
+
       if (j < glob.length && glob[j] === "]") {
         // ] immediately after [ is literal content, must escape in regex
         content.push("\\]");
         j++;
       }
-      
+
+      // Convert negated character class [!...] to [^...]
+      // Only if ! is the first character (position 0) in the class
+      // If ] was first (now at position 0), ! at position 1 is NOT negation
+      if (j < glob.length && glob[j] === "!" && content.length === 0) {
+        content.push("^");
+        j++;
+      }
+
       while (j < glob.length && glob[j] !== "]") {
         content.push(glob[j]);
         j++;
       }
-      
+
       regex += "[" + content.join("") + "]";
       i = j + 1;
     } else if (".[]+?^${}()|".includes(char)) {
@@ -531,12 +543,13 @@ function globToRegex(glob: string, anchored: boolean): RegExp {
   }
 
   // Add boundary handling
-  if (anchored) {
-    // Anchored patterns must match from the start
-    regex = "^" + regex;
+  if (effectiveAnchored) {
+    // Anchored patterns must match from the start, with optional "./" prefix
+    // This handles both "dist" and "./dist" paths produced by the scanner
+    regex = "^(?:\\./)?" + regex;
   } else {
     // Unanchored patterns can match at any level
-    regex = "(?:^|\\/)(" + regex + ")";
+    regex = "(?:^|\\/)(?:\\./)?(" + regex + ")";
   }
 
   // Add trailing pattern for directory matching
@@ -585,7 +598,7 @@ export function isIgnoredByGitignore(
  */
 function findGitignore(startDir: string): string | null {
   let current = startDir;
-  const root = resolve("/");
+  const root = parse(startDir).root;
 
   while (current !== root) {
     const gitignorePath = join(current, ".gitignore");
@@ -632,7 +645,7 @@ function isSourceFile(filePath: string): boolean {
  * @param debugLog - Optional debug logging function
  * @returns Array of absolute paths to source files
  */
-function discoverSourceFiles(
+export function discoverSourceFiles(
   dir: string,
   basePath: string = dir,
   gitignorePatterns?: GitignorePattern[] | null,
@@ -646,7 +659,7 @@ function discoverSourceFiles(
     for (const entry of entries) {
       const fullPath = join(dir, entry.name);
       const relativePath = fullPath.startsWith(basePath)
-        ? "." + fullPath.slice(basePath.length).replace(/\\/g, "/")
+        ? fullPath.slice(basePath.length).replace(/\\/g, "/").replace(/^\//, "")
         : fullPath;
 
       if (entry.isDirectory()) {

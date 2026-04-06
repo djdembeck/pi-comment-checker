@@ -7,7 +7,10 @@ import {
   isValidFileChange,
   parseGitignorePattern,
   isIgnoredByGitignore,
+  discoverSourceFiles,
 } from "./index.js";
+import { mkdir, writeFile, rm } from "fs/promises";
+import { join } from "path";
 
 describe("parseCommentOutput", () => {
   it("parses single comment from XML output", () => {
@@ -346,8 +349,16 @@ describe("isIgnoredByGitignore", () => {
 
   it("matches anchored pattern from root", () => {
     const patterns = [parseGitignorePattern("/dist")!];
-    expect(isIgnoredByGitignore("dist", true, patterns)).toBe(true);
-    expect(isIgnoredByGitignore("src/dist", true, patterns)).toBe(false);
+    // Scanner passes paths like "./dist" - anchored pattern should match only at root
+    expect(isIgnoredByGitignore("./dist", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("./src/dist", true, patterns)).toBe(false);
+  });
+
+  it("matches anchored pattern for nested directories", () => {
+    const patterns = [parseGitignorePattern("/dist")!];
+    // Anchored pattern "/dist" should NOT match "./src/dist" (nested)
+    expect(isIgnoredByGitignore("./src/dist", true, patterns)).toBe(false);
+    expect(isIgnoredByGitignore("./nested/deep/dist", true, patterns)).toBe(false);
   });
 
   it("matches double-star pattern", () => {
@@ -363,5 +374,53 @@ describe("isIgnoredByGitignore", () => {
     expect(isIgnoredByGitignore("build", false, patterns)).toBe(false);
     // But should match directories
     expect(isIgnoredByGitignore("build", true, patterns)).toBe(true);
+  });
+});
+
+describe("discoverSourceFiles integration", () => {
+  it("respects anchored gitignore patterns (root level)", async () => {
+    // Create temp directory structure with dist at root
+    const tmpDir = "/tmp/vitest-test-dist";
+    try {
+      // Create dist directory and file
+      await mkdir(join(tmpDir, "dist"), { recursive: true });
+      await writeFile(join(tmpDir, "dist", "test.ts"), "// comment");
+      // Create src directory and file
+      await mkdir(join(tmpDir, "src"), { recursive: true });
+      await writeFile(join(tmpDir, "src", "main.ts"), "// comment");
+
+      // Test with anchored pattern "/dist" - should exclude ./dist
+      const patterns = [parseGitignorePattern("/dist")!];
+      const files = discoverSourceFiles(tmpDir, tmpDir, patterns);
+
+      // Should find main.ts but not dist/test.ts
+      expect(files.length).toBe(1);
+      expect(files[0]).toContain("/src/main.ts");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("respects anchored gitignore patterns (nested directories)", async () => {
+    // Create temp directory structure with nested dist
+    const tmpDir = "/tmp/vitest-test-nested";
+    try {
+      // Create src/dist directory and file (nested)
+      await mkdir(join(tmpDir, "src", "dist"), { recursive: true });
+      await writeFile(join(tmpDir, "src", "dist", "test.ts"), "// comment");
+      // Create src directory and file
+      await writeFile(join(tmpDir, "src", "main.ts"), "// comment");
+
+      // Test with anchored pattern "/dist" - should NOT exclude ./src/dist (nested)
+      const patterns = [parseGitignorePattern("/dist")!];
+      const files = discoverSourceFiles(tmpDir, tmpDir, patterns);
+
+      // Should find both - src/main.ts and src/dist/test.ts since /dist only matches root
+      expect(files.length).toBe(2);
+      expect(files.some((f) => f.includes("/src/main.ts"))).toBe(true);
+      expect(files.some((f) => f.includes("/src/dist/test.ts"))).toBe(true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });

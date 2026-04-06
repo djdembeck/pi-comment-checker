@@ -57,9 +57,7 @@ For full details on comment detection rules, binary configuration, and advanced 
 
 Show binary location and setup help:
 
-```
-/check-comments
-```
+`/check-comments`
 
 ### `/check-comments <path>` — Scan files for problematic comments
 
