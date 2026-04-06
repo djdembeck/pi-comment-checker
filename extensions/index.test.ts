@@ -5,6 +5,8 @@ import {
   isValidEdit,
   buildCheckerInput,
   isValidFileChange,
+  parseGitignorePattern,
+  isIgnoredByGitignore,
 } from "./index.js";
 
 describe("parseCommentOutput", () => {
@@ -271,5 +273,95 @@ describe("isValidFileChange", () => {
         after: "content",
       }),
     ).toBe(true);
+  });
+});
+
+describe("parseGitignorePattern", () => {
+  it("parses simple pattern", () => {
+    const result = parseGitignorePattern("*.log");
+    expect(result).not.toBeNull();
+    expect(result?.negation).toBe(false);
+    expect(result?.directoryOnly).toBe(false);
+    expect(result?.anchored).toBe(false);
+  });
+
+  it("parses negation pattern", () => {
+    const result = parseGitignorePattern("!important.log");
+    expect(result).not.toBeNull();
+    expect(result?.negation).toBe(true);
+    expect(result?.pattern).toBe("!important.log");
+  });
+
+  it("parses directory-only pattern", () => {
+    const result = parseGitignorePattern("node_modules/");
+    expect(result).not.toBeNull();
+    expect(result?.directoryOnly).toBe(true);
+  });
+
+  it("parses anchored pattern", () => {
+    const result = parseGitignorePattern("/dist");
+    expect(result).not.toBeNull();
+    expect(result?.anchored).toBe(true);
+  });
+
+  it("parses complex pattern", () => {
+    const result = parseGitignorePattern("/build/**/*.js");
+    expect(result).not.toBeNull();
+    expect(result?.anchored).toBe(true);
+    expect(result?.directoryOnly).toBe(false);
+  });
+
+  it("parses character class with closing bracket literal", () => {
+    // Edge case: []] means "match the character ]"
+    const result = parseGitignorePattern("[]]");
+    expect(result).not.toBeNull();
+    // Should match file named "]"
+    expect(result?.regex.test("]")).toBe(true);
+    // Should not match empty string or other chars
+    expect(result?.regex.test("a")).toBe(false);
+  });
+});
+
+describe("isIgnoredByGitignore", () => {
+  it("matches simple wildcard pattern", () => {
+    const patterns = [parseGitignorePattern("*.log")!];
+    expect(isIgnoredByGitignore("debug.log", false, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("src/app.ts", false, patterns)).toBe(false);
+  });
+
+  it("matches directory pattern", () => {
+    const patterns = [parseGitignorePattern("node_modules/")!];
+    expect(isIgnoredByGitignore("node_modules", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("node_modules/package", true, patterns)).toBe(true);
+  });
+
+  it("handles negation", () => {
+    const patterns = [
+      parseGitignorePattern("*.log")!,
+      parseGitignorePattern("!important.log")!,
+    ];
+    expect(isIgnoredByGitignore("debug.log", false, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("important.log", false, patterns)).toBe(false);
+  });
+
+  it("matches anchored pattern from root", () => {
+    const patterns = [parseGitignorePattern("/dist")!];
+    expect(isIgnoredByGitignore("dist", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("src/dist", true, patterns)).toBe(false);
+  });
+
+  it("matches double-star pattern", () => {
+    const patterns = [parseGitignorePattern("**/node_modules")!];
+    expect(isIgnoredByGitignore("node_modules", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("src/node_modules", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("deep/nested/node_modules", true, patterns)).toBe(true);
+  });
+
+  it("skips directory-only patterns for files", () => {
+    const patterns = [parseGitignorePattern("build/")!];
+    // Directory-only pattern should not match files
+    expect(isIgnoredByGitignore("build", false, patterns)).toBe(false);
+    // But should match directories
+    expect(isIgnoredByGitignore("build", true, patterns)).toBe(true);
   });
 });
