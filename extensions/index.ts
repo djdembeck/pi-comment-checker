@@ -392,6 +392,7 @@ const SKIP_DIRECTORIES = new Set([
   ".git",
   ".svn",
   ".hg",
+  "node_modules",
 ]);
 
 /**
@@ -628,6 +629,60 @@ function findGitignore(startDir: string): string | null {
 }
 
 /**
+ * Finds all .gitignore files by walking up from the given directory to the repo root.
+ * Collects and merges all applicable .gitignore files for hierarchical rule application.
+ * @param startDir - Directory to start searching from
+ * @returns Array of { path, patterns } for each .gitignore found (closest first)
+ */
+function findGitignoreAncestors(startDir: string): Array<{ path: string; patterns: GitignorePattern[] }> {
+  const result: Array<{ path: string; patterns: GitignorePattern[] }> = [];
+  let current = startDir;
+  const root = parse(startDir).root;
+
+  while (current !== root) {
+    const gitignorePath = join(current, ".gitignore");
+    const gitPath = join(current, ".git");
+
+    // Check if .gitignore exists
+    try {
+      statSync(gitignorePath);
+      const patterns = parseGitignore(gitignorePath);
+      if (patterns) {
+        // Insert at beginning so closest (most specific) patterns are first
+        result.unshift({ path: gitignorePath, patterns });
+      }
+    } catch {
+      // .gitignore doesn't exist, continue
+    }
+
+    // Check if we've reached the git root
+    try {
+      statSync(gitPath);
+      // Found .git, stop here
+      break;
+    } catch {
+      // Not a git directory, continue up
+    }
+
+    current = resolve(current, "..");
+  }
+
+  return result;
+}
+
+/**
+ * Merges multiple gitignore pattern arrays, with later patterns (more specific) taking precedence.
+ * Negation patterns are evaluated in order across all pattern sets.
+ * @param patternSets - Array of pattern arrays from multiple .gitignore files (root to leaf order)
+ * @returns Combined array of all patterns in evaluation order
+ */
+function mergeGitignorePatterns(patternSets: GitignorePattern[][]): GitignorePattern[] {
+  // Flatten all patterns - earlier sets (more root-level) come first,
+  // so later patterns (more specific/closer to target) naturally override
+  return patternSets.flat();
+}
+
+/**
  * Wraps an error with context for better error messages.
  * @param err - The error to wrap
  * @param context - Contextual information to add to the error message
@@ -703,7 +758,9 @@ export function discoverSourceFiles(
       }
     }
   } catch (err) {
-    // Skip directories we can't read
+    // Surface directory traversal errors with context instead of silently dropping
+    const errorContext = wrapWithContext(err, `Failed to read directory ${dir}`);
+    debugLog?.(`Directory traversal error: ${errorContext instanceof Error ? errorContext.message : errorContext}`);
   }
 
   return files;
@@ -743,9 +800,16 @@ async function checkFileForComments(
     };
 
     const result = await runCommentChecker(checkerInput, binaryPath, debugLog);
+    if (result === null) {
+      // Treat null (timeout, spawn failure, or other error) as failure
+      return { 
+        status: "failed", 
+        error: `Binary check failed for ${filePath}: timeout, spawn error, or no response` 
+      };
+    }
     return {
       status: "ok",
-      comments: result?.comments ?? [],
+      comments: result.comments ?? [],
     };
   } catch (err) {
     const message = `Error reading/checking ${filePath}`;
@@ -986,16 +1050,21 @@ Download prebuilt:
 
       ctx.ui.notify(`Scanning for comments in ${targetPath}...`, "info");
 
-      // Find and parse .gitignore if scanning a directory
+      // Collect and merge all applicable .gitignore files hierarchically
       let gitignorePatterns: GitignorePattern[] | null = null;
       let gitignoreDir: string = targetPath;
+      const gitignoreSources: string[] = [];
       if (fileStats.isDirectory()) {
-        const gitignorePath = findGitignore(targetPath);
-        if (gitignorePath) {
-          gitignoreDir = dirname(gitignorePath);
-          gitignorePatterns = parseGitignore(gitignorePath);
+        const ancestorGitignores = findGitignoreAncestors(targetPath);
+        if (ancestorGitignores.length > 0) {
+          // Use the directory of the closest .gitignore as base for relative paths
+          gitignoreDir = dirname(ancestorGitignores[ancestorGitignores.length - 1].path);
+          // Merge all patterns - root-level first, then more specific
+          const allPatternSets = ancestorGitignores.map(g => g.patterns);
+          gitignorePatterns = mergeGitignorePatterns(allPatternSets);
+          gitignoreSources.push(...ancestorGitignores.map(g => g.path));
           if (gitignorePatterns) {
-            console.log(`Using .gitignore: ${gitignorePath} (${gitignorePatterns.length} patterns)`);
+            console.log(`Using .gitignore: ${gitignoreSources.join(", ")} (${gitignorePatterns.length} patterns)`);
           }
         }
       }
@@ -1053,9 +1122,35 @@ Download prebuilt:
       console.log(`Files with problematic comments: ${filesWithComments}`);
       console.log(`Total problematic comments: ${allComments.length}`);
 
-      if (allComments.length === 0) {
+      if (allComments.length === 0 && failedFiles === 0) {
         console.log("\n✓ No problematic comments found!");
         ctx.ui.notify("No problematic comments found", "info");
+      } else if (failedFiles > 0) {
+        // Emit incomplete-scan error when files could not be checked
+        console.log("\n⚠ Scan completed with errors");
+        console.log(`${failedFiles} file(s) could not be checked due to errors.`);
+        ctx.ui.notify(`Scan incomplete: ${failedFiles} file(s) could not be checked`, "warning");
+        if (allComments.length > 0) {
+          // Also show comments found in successfully checked files
+          console.log("\n" + "-".repeat(60));
+          console.log("PROBLEMATIC COMMENTS FOUND (in successfully checked files):");
+          console.log("-".repeat(60));
+
+          
+          const byFile = new Map<string, Array<{ line: number; text: string }>>();
+          for (const comment of allComments) {
+            const existing = byFile.get(comment.file) ?? [];
+            existing.push({ line: comment.line, text: comment.text });
+            byFile.set(comment.file, existing);
+          }
+
+          for (const [file, comments] of byFile) {
+            console.log(`\n${file}`);
+            for (const c of comments) {
+              console.log(`  Line ${c.line}: ${c.text}`);
+            }
+          }
+        }
       } else {
         console.log("\n" + "-".repeat(60));
         console.log("PROBLEMATIC COMMENTS FOUND:");
