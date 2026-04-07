@@ -5,7 +5,12 @@ import {
   isValidEdit,
   buildCheckerInput,
   isValidFileChange,
+  parseGitignorePattern,
+  isIgnoredByGitignore,
+  discoverSourceFiles,
 } from "./index.js";
+import { mkdir, writeFile, rm } from "fs/promises";
+import { join } from "path";
 
 describe("parseCommentOutput", () => {
   it("parses single comment from XML output", () => {
@@ -271,5 +276,151 @@ describe("isValidFileChange", () => {
         after: "content",
       }),
     ).toBe(true);
+  });
+});
+
+describe("parseGitignorePattern", () => {
+  it("parses simple pattern", () => {
+    const result = parseGitignorePattern("*.log");
+    expect(result).not.toBeNull();
+    expect(result?.negation).toBe(false);
+    expect(result?.directoryOnly).toBe(false);
+    expect(result?.anchored).toBe(false);
+  });
+
+  it("parses negation pattern", () => {
+    const result = parseGitignorePattern("!important.log");
+    expect(result).not.toBeNull();
+    expect(result?.negation).toBe(true);
+    expect(result?.pattern).toBe("!important.log");
+  });
+
+  it("parses directory-only pattern", () => {
+    const result = parseGitignorePattern("node_modules/");
+    expect(result).not.toBeNull();
+    expect(result?.directoryOnly).toBe(true);
+  });
+
+  it("parses anchored pattern", () => {
+    const result = parseGitignorePattern("/dist");
+    expect(result).not.toBeNull();
+    expect(result?.anchored).toBe(true);
+  });
+
+  it("parses complex pattern", () => {
+    const result = parseGitignorePattern("/build/**/*.js");
+    expect(result).not.toBeNull();
+    expect(result?.anchored).toBe(true);
+    expect(result?.directoryOnly).toBe(false);
+  });
+
+  it("parses character class with closing bracket literal", () => {
+    // Edge case: []] means "match the character ]"
+    const result = parseGitignorePattern("[]]");
+    expect(result).not.toBeNull();
+    // Should match file named "]"
+    expect(result?.regex.test("]")).toBe(true);
+    // Should not match empty string or other chars
+    expect(result?.regex.test("a")).toBe(false);
+  });
+});
+
+describe("isIgnoredByGitignore", () => {
+  it("matches simple wildcard pattern", () => {
+    const patterns = [parseGitignorePattern("*.log")!];
+    expect(isIgnoredByGitignore("debug.log", false, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("src/app.ts", false, patterns)).toBe(false);
+  });
+
+  it("matches directory pattern", () => {
+    const patterns = [parseGitignorePattern("node_modules/")!];
+    expect(isIgnoredByGitignore("node_modules", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("node_modules/package", true, patterns)).toBe(true);
+  });
+
+  it("handles negation", () => {
+    const patterns = [
+      parseGitignorePattern("*.log")!,
+      parseGitignorePattern("!important.log")!,
+    ];
+    expect(isIgnoredByGitignore("debug.log", false, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("important.log", false, patterns)).toBe(false);
+  });
+
+  it("matches anchored pattern from root", () => {
+    const patterns = [parseGitignorePattern("/dist")!];
+    // Scanner passes paths like "./dist" - anchored pattern should match only at root
+    expect(isIgnoredByGitignore("./dist", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("./src/dist", true, patterns)).toBe(false);
+  });
+
+  it("matches anchored pattern for nested directories", () => {
+    const patterns = [parseGitignorePattern("/dist")!];
+    // Anchored pattern "/dist" should NOT match "./src/dist" (nested)
+    expect(isIgnoredByGitignore("./src/dist", true, patterns)).toBe(false);
+    expect(isIgnoredByGitignore("./nested/deep/dist", true, patterns)).toBe(false);
+  });
+
+  it("matches double-star pattern", () => {
+    const patterns = [parseGitignorePattern("**/node_modules")!];
+    expect(isIgnoredByGitignore("node_modules", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("src/node_modules", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("deep/nested/node_modules", true, patterns)).toBe(true);
+  });
+
+  it("skips directory-only patterns for files", () => {
+    const patterns = [parseGitignorePattern("build/")!];
+    // Directory-only pattern should not match files
+    expect(isIgnoredByGitignore("build", false, patterns)).toBe(false);
+    // But should match directories
+    expect(isIgnoredByGitignore("build", true, patterns)).toBe(true);
+  });
+});
+
+describe("discoverSourceFiles integration", () => {
+  it("respects anchored gitignore patterns (root level)", async () => {
+    // Create temp directory structure with dist at root
+    const tmpDir = "/tmp/vitest-test-dist";
+    try {
+      // Create dist directory and file
+      await mkdir(join(tmpDir, "dist"), { recursive: true });
+      await writeFile(join(tmpDir, "dist", "test.ts"), "// comment");
+      // Create src directory and file
+      await mkdir(join(tmpDir, "src"), { recursive: true });
+      await writeFile(join(tmpDir, "src", "main.ts"), "// comment");
+
+      // Test with anchored pattern "/dist" - should exclude ./dist
+      const patterns = [parseGitignorePattern("/dist")!];
+      const files = discoverSourceFiles(tmpDir, tmpDir, patterns);
+
+      // Should find main.ts but not dist/test.ts
+      expect(files.length).toBe(1);
+      expect(files[0]).toContain("/src/main.ts");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("respects anchored gitignore patterns (nested directories)", async () => {
+    // Create temp directory structure with nested dist
+    const tmpDir = "/tmp/vitest-test-nested";
+    try {
+      // Create src/dist directory and file (nested)
+      await mkdir(join(tmpDir, "src", "dist"), { recursive: true });
+      await writeFile(join(tmpDir, "src", "dist", "test.ts"), "// comment");
+      // Create src directory and file
+      await writeFile(join(tmpDir, "src", "main.ts"), "// comment");
+
+      // Test with anchored pattern "/dist" - should NOT exclude ./src/dist (nested)
+      const patterns = [parseGitignorePattern("/dist")!];
+      const files = discoverSourceFiles(tmpDir, tmpDir, patterns);
+
+      // Should find both - src/main.ts and src/dist/test.ts since /dist only matches root
+      expect(files.length).toBe(2);
+      expect(files.some((f) => f.includes("/src/main.ts"))).toBe(true);
+      expect(files.some((f) => f.includes("/src/dist/test.ts"))).toBe(true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });

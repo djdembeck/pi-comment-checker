@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
-import { delimiter, resolve } from "node:path";
+import { accessSync, constants, readdirSync, readFileSync, statSync } from "node:fs";
+import { delimiter, extname, join, parse, resolve } from "node:path";
 
 /**
  * Pi extension that integrates go-claude-code-comment-checker
@@ -354,6 +354,384 @@ export function isValidFileChange(
 }
 
 /**
+ * Common source code file extensions to check for comments.
+ */
+const SOURCE_EXTENSIONS = new Set([
+  // JavaScript/TypeScript
+  ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+  // Python
+  ".py", ".pyw",
+  // Go
+  ".go",
+  // Rust
+  ".rs",
+  // Java/Kotlin
+  ".java", ".kt", ".kts",
+  // C/C++
+  ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx",
+  // Ruby
+  ".rb", ".rake",
+  // PHP
+  ".php",
+  // Swift/Objective-C
+  ".swift", ".m", ".mm",
+  // C#
+  ".cs",
+  // Scala
+  ".scala", ".sc",
+  // Shell scripts
+  ".sh", ".bash", ".zsh",
+  // Other common languages
+  ".lua", ".r", ".rkt", ".clj", ".ex", ".exs", ".erl", ".hs", ".ml", ".fs", ".vb",
+]);
+
+/**
+ * Directories to always skip when scanning for source files.
+ */
+const SKIP_DIRECTORIES = new Set([
+  ".git",
+  ".svn",
+  ".hg",
+]);
+
+/**
+ * Parsed gitignore pattern.
+ */
+interface GitignorePattern {
+  pattern: string;
+  negation: boolean;
+  directoryOnly: boolean;
+  anchored: boolean;
+  regex: RegExp;
+}
+
+/**
+ * Parses a .gitignore file and returns an array of patterns.
+ * @param gitignorePath - Path to the .gitignore file
+ * @returns Array of parsed patterns, or null if file not found/readable
+ */
+function parseGitignore(gitignorePath: string): GitignorePattern[] | null {
+  try {
+    const content = readFileSync(gitignorePath, "utf-8");
+    const patterns: GitignorePattern[] = [];
+
+    for (const line of content.split("\n")) {
+      // Trim and skip empty lines and comments
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) {
+        continue;
+      }
+
+      const pattern = parseGitignorePattern(trimmed);
+      if (pattern) {
+        patterns.push(pattern);
+      }
+    }
+
+    return patterns.length > 0 ? patterns : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parses a single gitignore pattern line into a structured format.
+ * @param line - Single line from .gitignore
+ * @returns Parsed pattern or null if invalid
+ */
+export function parseGitignorePattern(line: string): GitignorePattern | null {
+  let pattern = line;
+  const negation = pattern.startsWith("!");
+  if (negation) {
+    pattern = pattern.slice(1);
+  }
+
+  // Directory-only pattern (trailing slash)
+  const directoryOnly = pattern.endsWith("/");
+  if (directoryOnly) {
+    pattern = pattern.slice(0, -1);
+  }
+
+  // Anchored pattern (starts with /)
+  const anchored = pattern.startsWith("/");
+  if (anchored) {
+    pattern = pattern.slice(1);
+  }
+
+  // Convert glob pattern to regex
+  const regex = globToRegex(pattern, anchored);
+
+  return {
+    pattern: line,
+    negation,
+    directoryOnly,
+    anchored,
+    regex,
+  };
+}
+
+/**
+ * Converts a gitignore glob pattern to a RegExp.
+ * Handles: *, **, ?, character classes, and common patterns.
+ * @param glob - Glob pattern (without leading ! or trailing /)
+ * @param anchored - Whether pattern is anchored to root
+ * @returns RegExp for matching
+ */
+function globToRegex(glob: string, anchored: boolean): RegExp {
+  // Patterns containing / (excluding trailing slash) must be anchored to gitignore root
+  const hasSlash = glob.length > 1 && glob.includes("/");
+  const effectiveAnchored = anchored || hasSlash;
+
+  let regex = "";
+  let i = 0;
+
+  while (i < glob.length) {
+    const char = glob[i];
+
+    if (char === "*" && glob[i + 1] === "*") {
+      // ** matches zero or more directories
+      if (glob[i + 2] === "/") {
+        regex += "(?:[^/]*(?:\\/|$))*";
+        i += 3;
+      } else {
+        regex += ".*";
+        i += 2;
+      }
+    } else if (char === "*") {
+      // * matches anything except /
+      regex += "[^/]*";
+      i++;
+    } else if (char === "?") {
+      // ? matches any single character except /
+      regex += "[^/]";
+      i++;
+    } else if (char === "[") {
+      // Character class
+      // Handle edge case: []abc] or []] - first ] is literal, not closing
+      let j = i + 1;
+      const content: string[] = [];
+
+      if (j < glob.length && glob[j] === "]") {
+        // ] immediately after [ is literal content, must escape in regex
+        content.push("\\]");
+        j++;
+      }
+
+      // Convert negated character class [!...] to [^...]
+      // Only if ! is the first character (position 0) in the class
+      // If ] was first (now at position 0), ! at position 1 is NOT negation
+      if (j < glob.length && glob[j] === "!" && content.length === 0) {
+        content.push("^");
+        j++;
+      }
+
+      while (j < glob.length && glob[j] !== "]") {
+        content.push(glob[j]);
+        j++;
+      }
+
+      regex += "[" + content.join("") + "]";
+      i = j + 1;
+    } else if (".[]+?^${}()|".includes(char)) {
+      // Escape regex special characters
+      regex += "\\" + char;
+      i++;
+    } else {
+      regex += char;
+      i++;
+    }
+  }
+
+  // Add boundary handling
+  if (effectiveAnchored) {
+    // Anchored patterns must match from the start, with optional "./" prefix
+    // This handles both "dist" and "./dist" paths produced by the scanner
+    regex = "^(?:\\./)?" + regex;
+  } else {
+    // Unanchored patterns can match at any level
+    regex = "(?:^|\\/)(?:\\./)?(" + regex + ")";
+  }
+
+  // Add trailing pattern for directory matching
+  regex += "(?:\\/|$)";
+
+  return new RegExp(regex);
+}
+
+/**
+ * Checks if a path is ignored by gitignore patterns.
+ * @param relativePath - Relative path from the gitignore root
+ * @param isDirectory - Whether the path is a directory
+ * @param patterns - Array of gitignore patterns
+ * @returns True if path should be ignored
+ */
+export function isIgnoredByGitignore(
+  relativePath: string,
+  isDirectory: boolean,
+  patterns: GitignorePattern[],
+): boolean {
+  // Normalize path to use forward slashes
+  const normalizedPath = relativePath.replace(/\\/g, "/");
+  let ignored = false;
+
+  for (const pattern of patterns) {
+    // Skip directory-only patterns for files
+    if (pattern.directoryOnly && !isDirectory) {
+      continue;
+    }
+
+    const matches = pattern.regex.test(normalizedPath);
+
+    if (matches) {
+      ignored = !pattern.negation;
+    }
+  }
+
+  return ignored;
+}
+
+/**
+ * Finds the .gitignore file by walking up from the given directory.
+ * Stops at the first .git directory found (project root).
+ * @param startDir - Directory to start searching from
+ * @returns Path to .gitignore, or null if not found
+ */
+function findGitignore(startDir: string): string | null {
+  let current = startDir;
+  const root = parse(startDir).root;
+
+  while (current !== root) {
+    const gitignorePath = join(current, ".gitignore");
+    const gitPath = join(current, ".git");
+
+    // Check if .gitignore exists
+    try {
+      statSync(gitignorePath);
+      return gitignorePath;
+    } catch {
+      // .gitignore doesn't exist, continue
+    }
+
+    // Check if we've reached the git root
+    try {
+      statSync(gitPath);
+      // Found .git but no .gitignore, stop here
+      return null;
+    } catch {
+      // Not a git directory, continue up
+    }
+
+    current = resolve(current, "..");
+  }
+
+  return null;
+}
+
+/**
+ * Checks if a file path has a source code extension.
+ * @param filePath - Path to check
+ * @returns True if the file is a source code file
+ */
+function isSourceFile(filePath: string): boolean {
+  return SOURCE_EXTENSIONS.has(extname(filePath).toLowerCase());
+}
+
+/**
+ * Recursively discovers source files in a directory.
+ * Skips common non-source directories like node_modules, .git, etc.
+ * @param dir - Directory to scan
+ * @param basePath - Base path for relative path calculation
+ * @param gitignorePatterns - Optional gitignore patterns to respect
+ * @param debugLog - Optional debug logging function
+ * @returns Array of absolute paths to source files
+ */
+export function discoverSourceFiles(
+  dir: string,
+  basePath: string = dir,
+  gitignorePatterns?: GitignorePattern[] | null,
+  debugLog?: (...args: unknown[]) => void,
+): string[] {
+  const files: string[] = [];
+
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      const relativePath = fullPath.startsWith(basePath)
+        ? fullPath.slice(basePath.length).replace(/\\/g, "/").replace(/^\//, "")
+        : fullPath;
+
+      if (entry.isDirectory()) {
+        // Skip VCS directories always
+        if (SKIP_DIRECTORIES.has(entry.name)) {
+          continue;
+        }
+
+        // Skip symlinks to avoid circular references
+        if (entry.isSymbolicLink()) {
+          continue;
+        }
+
+        // Check gitignore
+        if (gitignorePatterns && isIgnoredByGitignore(relativePath, true, gitignorePatterns)) {
+          debugLog?.(`Skipping (gitignore): ${relativePath}`);
+          continue;
+        }
+
+        files.push(...discoverSourceFiles(fullPath, basePath, gitignorePatterns, debugLog));
+      } else if (entry.isFile() && isSourceFile(entry.name)) {
+        // Check gitignore for files
+        if (gitignorePatterns && isIgnoredByGitignore(relativePath, false, gitignorePatterns)) {
+          debugLog?.(`Skipping (gitignore): ${relativePath}`);
+          continue;
+        }
+        files.push(fullPath);
+      }
+    }
+  } catch (err) {
+    // Skip directories we can't read
+  }
+
+  return files;
+}
+
+/**
+ * Reads a file and checks it for problematic comments.
+ * @param filePath - Absolute path to the file
+ * @param binaryPath - Path to the comment-checker binary
+ * @param debugLog - Debug logging function
+ * @returns Array of comments found, or null on error
+ */
+async function checkFileForComments(
+  filePath: string,
+  binaryPath: string,
+  debugLog: (...args: unknown[]) => void,
+): Promise<Array<{ file: string; line: number; text: string }> | null> {
+  try {
+    const content = readFileSync(filePath, "utf-8");
+    if (!content.trim()) {
+      return null; // Skip empty files
+    }
+
+    const checkerInput: CommentCheckerInput = {
+      tool_name: "write",
+      file_path: filePath,
+      tool_input: {
+        file_path: filePath,
+        content,
+      },
+    };
+
+    const result = await runCommentChecker(checkerInput, binaryPath, debugLog);
+    return result?.comments ?? null;
+  } catch (err) {
+    debugLog(`Error reading ${filePath}:`, err);
+    return null;
+  }
+}
+
+/**
  * Pi extension entry point that registers event handlers to intercept and validate file modifications.
  * Hooks into write, edit, multiedit, and apply_patch tools to check for AI-generated comments.
  * Provides a /check-comments command for binary status verification and setup help.
@@ -527,10 +905,10 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
     }
   });
 
-  // Register a command to check binary status
+  // Register a command to check binary status or scan files for comments
   pi.registerCommand("check-comments", {
-    description: "Check comment-checker status and binary location",
-    handler: async (_args, ctx) => {
+    description: "Check comment-checker status, or scan a file/directory for problematic comments",
+    handler: async (args, ctx) => {
       const status = findBinary();
 
       if (!status.found) {
@@ -562,7 +940,118 @@ Download prebuilt:
         return;
       }
 
-      ctx.ui.notify(`comment-checker: ${status.path} (${status.source})`, "info");
+      // If no arguments, just show status
+      if (!args || args.trim() === "") {
+        ctx.ui.notify(`comment-checker: ${status.path} (${status.source})`, "info");
+        console.log(`Comment-checker binary: ${status.path} (${status.source})`);
+        console.log("\nUsage: /check-comments [path]");
+        console.log("  - No path: Show this status message");
+        console.log("  - File path: Check that file for problematic comments");
+        console.log("  - Directory: Recursively scan for problematic comments in all source files");
+        return;
+      }
+
+      // Parse the path argument
+      const targetPath = resolve(ctx.cwd, args.trim());
+      let fileStats;
+      try {
+        fileStats = statSync(targetPath);
+      } catch (err) {
+        ctx.ui.notify(`Path not found: ${targetPath}`, "error");
+        return;
+      }
+
+      ctx.ui.notify(`Scanning for comments in ${targetPath}...`, "info");
+
+      // Find and parse .gitignore if scanning a directory
+      let gitignorePatterns: GitignorePattern[] | null = null;
+      if (fileStats.isDirectory()) {
+        const gitignorePath = findGitignore(targetPath);
+        if (gitignorePath) {
+          gitignorePatterns = parseGitignore(gitignorePath);
+          if (gitignorePatterns) {
+            console.log(`Using .gitignore: ${gitignorePath} (${gitignorePatterns.length} patterns)`);
+          }
+        }
+      }
+
+      // Collect files to check
+      const filesToCheck: string[] = [];
+      if (fileStats.isFile()) {
+        if (isSourceFile(targetPath)) {
+          filesToCheck.push(targetPath);
+        } else {
+          ctx.ui.notify(`Not a source code file: ${targetPath}`, "warning");
+          return;
+        }
+      } else if (fileStats.isDirectory()) {
+        filesToCheck.push(...discoverSourceFiles(targetPath, targetPath, gitignorePatterns, debug));
+        if (filesToCheck.length === 0) {
+          ctx.ui.notify("No source files found in directory", "warning");
+          return;
+        }
+      } else {
+        ctx.ui.notify(`Invalid path type: ${targetPath}`, "error");
+        return;
+      }
+
+      // Check each file
+      const allComments: Array<{ file: string; line: number; text: string }> = [];
+      let filesChecked = 0;
+      let filesWithComments = 0;
+
+      for (const filePath of filesToCheck) {
+        const comments = await checkFileForComments(filePath, status.path, debug);
+        filesChecked++;
+
+        if (comments && comments.length > 0) {
+          filesWithComments++;
+          allComments.push(...comments);
+        }
+      }
+
+      // Report results
+      console.log("\n" + "=".repeat(60));
+      console.log("COMMENT CHECKER RESULTS");
+      console.log("=".repeat(60));
+      console.log(`Files scanned: ${filesChecked}`);
+      console.log(`Files with problematic comments: ${filesWithComments}`);
+      console.log(`Total problematic comments: ${allComments.length}`);
+
+      if (allComments.length === 0) {
+        console.log("\n✓ No problematic comments found!");
+        ctx.ui.notify("No problematic comments found", "info");
+      } else {
+        console.log("\n" + "-".repeat(60));
+        console.log("PROBLEMATIC COMMENTS FOUND:");
+        console.log("-".repeat(60));
+
+        // Group by file for cleaner output
+        const byFile = new Map<string, Array<{ line: number; text: string }>>();
+        for (const comment of allComments) {
+          const existing = byFile.get(comment.file) ?? [];
+          existing.push({ line: comment.line, text: comment.text });
+          byFile.set(comment.file, existing);
+        }
+
+        for (const [file, comments] of byFile) {
+          console.log(`\n${file}`);
+          for (const c of comments) {
+            console.log(`  Line ${c.line}: ${c.text}`);
+          }
+        }
+
+        console.log("\n" + "-".repeat(60));
+        console.log("These comments may violate the self-documenting code principle.");
+        console.log("Consider:");
+        console.log("  - Using meaningful variable/function names");
+        console.log("  - Extracting functions instead of explaining with comments");
+        console.log("  - Letting the code speak for itself");
+        console.log("\nAllowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint-disable), shebangs");
+        console.log("=".repeat(60));
+
+        ctx.ui.notify(`Found ${allComments.length} problematic comment(s) in ${filesWithComments} file(s)`, "warning");
+      }
     },
   });
 
