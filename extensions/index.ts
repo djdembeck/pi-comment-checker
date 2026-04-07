@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { accessSync, constants, readdirSync, readFileSync, statSync } from "node:fs";
-import { delimiter, extname, join, parse, resolve } from "node:path";
+import { dirname, delimiter, extname, join, parse, resolve } from "node:path";
 
 /**
  * Pi extension that integrates go-claude-code-comment-checker
@@ -628,6 +628,19 @@ function findGitignore(startDir: string): string | null {
 }
 
 /**
+ * Wraps an error with context for better error messages.
+ * @param err - The error to wrap
+ * @param context - Contextual information to add to the error message
+ * @returns Error with context
+ */
+function wrapWithContext(err: unknown, context: string): Error | string {
+  if (err instanceof Error) {
+    return new Error(`${context}: ${err.message}`);
+  }
+  return `${context}: ${err}`;
+}
+
+/**
  * Checks if a file path has a source code extension.
  * @param filePath - Path to check
  * @returns True if the file is a source code file
@@ -701,17 +714,23 @@ export function discoverSourceFiles(
  * @param filePath - Absolute path to the file
  * @param binaryPath - Path to the comment-checker binary
  * @param debugLog - Debug logging function
- * @returns Array of comments found, or null on error
+ * @returns Object with status and comments, or error
  */
 async function checkFileForComments(
   filePath: string,
   binaryPath: string,
   debugLog: (...args: unknown[]) => void,
-): Promise<Array<{ file: string; line: number; text: string }> | null> {
+): Promise<{
+  status: "ok";
+  comments: Array<{ file: string; line: number; text: string }>;
+} | {
+  status: "failed";
+  error: Error | string;
+}> {
   try {
     const content = readFileSync(filePath, "utf-8");
     if (!content.trim()) {
-      return null; // Skip empty files
+      return { status: "ok", comments: [] };
     }
 
     const checkerInput: CommentCheckerInput = {
@@ -724,10 +743,14 @@ async function checkFileForComments(
     };
 
     const result = await runCommentChecker(checkerInput, binaryPath, debugLog);
-    return result?.comments ?? null;
+    return {
+      status: "ok",
+      comments: result?.comments ?? [],
+    };
   } catch (err) {
-    debugLog(`Error reading ${filePath}:`, err);
-    return null;
+    const message = `Error reading/checking ${filePath}`;
+    const error = wrapWithContext(err, message);
+    return { status: "failed", error };
   }
 }
 
@@ -965,9 +988,11 @@ Download prebuilt:
 
       // Find and parse .gitignore if scanning a directory
       let gitignorePatterns: GitignorePattern[] | null = null;
+      let gitignoreDir: string = targetPath;
       if (fileStats.isDirectory()) {
         const gitignorePath = findGitignore(targetPath);
         if (gitignorePath) {
+          gitignoreDir = dirname(gitignorePath);
           gitignorePatterns = parseGitignore(gitignorePath);
           if (gitignorePatterns) {
             console.log(`Using .gitignore: ${gitignorePath} (${gitignorePatterns.length} patterns)`);
@@ -985,7 +1010,7 @@ Download prebuilt:
           return;
         }
       } else if (fileStats.isDirectory()) {
-        filesToCheck.push(...discoverSourceFiles(targetPath, targetPath, gitignorePatterns, debug));
+        filesToCheck.push(...discoverSourceFiles(targetPath, gitignoreDir, gitignorePatterns, debug));
         if (filesToCheck.length === 0) {
           ctx.ui.notify("No source files found in directory", "warning");
           return;
@@ -999,14 +1024,21 @@ Download prebuilt:
       const allComments: Array<{ file: string; line: number; text: string }> = [];
       let filesChecked = 0;
       let filesWithComments = 0;
+      let failedFiles = 0;
 
       for (const filePath of filesToCheck) {
-        const comments = await checkFileForComments(filePath, status.path, debug);
+        const result = await checkFileForComments(filePath, status.path, debug);
         filesChecked++;
 
-        if (comments && comments.length > 0) {
+        if (result.status === "failed") {
+          failedFiles++;
+          console.error(`Failed to check ${filePath}: ${result.error instanceof Error ? result.error.message : result.error}`);
+          continue;
+        }
+
+        if (result.comments.length > 0) {
           filesWithComments++;
-          allComments.push(...comments);
+          allComments.push(...result.comments);
         }
       }
 
@@ -1015,6 +1047,9 @@ Download prebuilt:
       console.log("COMMENT CHECKER RESULTS");
       console.log("=".repeat(60));
       console.log(`Files scanned: ${filesChecked}`);
+      if (failedFiles > 0) {
+        console.log(`Files that could not be checked: ${failedFiles}`);
+      }
       console.log(`Files with problematic comments: ${filesWithComments}`);
       console.log(`Total problematic comments: ${allComments.length}`);
 

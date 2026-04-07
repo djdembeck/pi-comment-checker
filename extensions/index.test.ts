@@ -9,8 +9,9 @@ import {
   isIgnoredByGitignore,
   discoverSourceFiles,
 } from "./index.js";
-import { mkdir, writeFile, rm } from "fs/promises";
-import { join } from "path";
+import { mkdir, writeFile, rm, mkdtemp } from "fs/promises";
+import { join, dirname, relative } from "path";
+import { tmpdir } from "os";
 
 describe("parseCommentOutput", () => {
   it("parses single comment from XML output", () => {
@@ -380,7 +381,7 @@ describe("isIgnoredByGitignore", () => {
 describe("discoverSourceFiles integration", () => {
   it("respects anchored gitignore patterns (root level)", async () => {
     // Create temp directory structure with dist at root
-    const tmpDir = "/tmp/vitest-test-dist";
+    const tmpDir = await mkdtemp(join(tmpdir(), "vitest-test-dist"));
     try {
       // Create dist directory and file
       await mkdir(join(tmpDir, "dist"), { recursive: true });
@@ -395,7 +396,8 @@ describe("discoverSourceFiles integration", () => {
 
       // Should find main.ts but not dist/test.ts
       expect(files.length).toBe(1);
-      expect(files[0]).toContain("/src/main.ts");
+      const relativePath = relative(tmpDir, files[0]).replace(/\\/g, "/");
+      expect(relativePath.endsWith("src/main.ts")).toBe(true);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -403,7 +405,7 @@ describe("discoverSourceFiles integration", () => {
 
   it("respects anchored gitignore patterns (nested directories)", async () => {
     // Create temp directory structure with nested dist
-    const tmpDir = "/tmp/vitest-test-nested";
+    const tmpDir = await mkdtemp(join(tmpdir(), "vitest-test-nested"));
     try {
       // Create src/dist directory and file (nested)
       await mkdir(join(tmpDir, "src", "dist"), { recursive: true });
@@ -417,8 +419,10 @@ describe("discoverSourceFiles integration", () => {
 
       // Should find both - src/main.ts and src/dist/test.ts since /dist only matches root
       expect(files.length).toBe(2);
-      expect(files.some((f) => f.includes("/src/main.ts"))).toBe(true);
-      expect(files.some((f) => f.includes("/src/dist/test.ts"))).toBe(true);
+      const mainFile = files.find((f) => relative(tmpDir, f).replace(/\\/g, "/").includes("src/main.ts"));
+      const distFile = files.find((f) => relative(tmpDir, f).replace(/\\/g, "/").includes("src/dist/test.ts"));
+      expect(mainFile).toBeDefined();
+      expect(distFile).toBeDefined();
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
