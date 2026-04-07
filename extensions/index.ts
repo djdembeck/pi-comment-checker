@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { accessSync, constants, readdirSync, readFileSync, statSync } from "node:fs";
+import { makeRe } from "picomatch";
+
 import { dirname, delimiter, extname, join, parse, resolve } from "node:path";
 
 /**
@@ -116,15 +118,13 @@ function findBinary(): BinaryStatus {
  * Executes the comment-checker binary with the given input and returns parsed output.
  * Handles timeout protection (30s), graceful degradation on errors, and process cleanup.
  * @param input - The comment checker input data with tool name, file path, and content
- * @param binaryPath - Full path to the comment-checker binary
  * @param debugLog - Debug logging function for troubleshooting
- * @returns Promise resolving to parsed output or null on error/timeout/no comments
  */
 async function runCommentChecker(
   input: CommentCheckerInput,
   binaryPath: string,
   debugLog: (...args: unknown[]) => void,
-): Promise<CommentCheckerOutput | null> {
+): Promise<{ status: "ok"; result: CommentCheckerOutput; source: "clean" | "with-comments" } | { status: "error"; error: Error | string }> {
   return new Promise((resolve) => {
     const child = spawn(binaryPath, [], {
       stdio: ["pipe", "pipe", "pipe"],
@@ -150,7 +150,7 @@ async function runCommentChecker(
       }
     };
 
-    const resolveOnce = (value: CommentCheckerOutput | null) => {
+    const resolveOnce = (value: { status: "ok"; result: CommentCheckerOutput; source: "clean" | "with-comments" } | { status: "error"; error: Error | string }) => {
       if (!resolved) {
         resolved = true;
         cleanup();
@@ -186,28 +186,28 @@ async function runCommentChecker(
       // 2 = block (problematic comments detected)
       // 1 or other = error (binary issue, parsing error, invalid input)
       if (code === 0) {
-        resolveOnce(null);
+        resolveOnce({ status: "ok", result: { comments: [] }, source: "clean" });
       } else if (code === 2) {
         const comments = parseCommentOutput(stderr + '\n' + stdout);
         if (!comments || comments.length === 0) {
           debugLog('Comment-checker returned exit code 2 but with no comments, treating as fail');
-          resolveOnce(null);
+          resolveOnce({ status: "ok", result: { comments: [] }, source: "clean" });
         } else {
-          resolveOnce({ comments });
+          resolveOnce({ status: "ok", result: { comments }, source: "with-comments" });
         }
       } else {
         // Binary error - log when debug enabled, treat as pass (graceful degradation)
         if (!timedOut) {
           debugLog(`Binary exited with code ${code} (treating as pass): ${stderr || stdout}`);
         }
-        resolveOnce(null);
+        resolveOnce({ status: "error", error: `Binary exited with code ${code}` });
       }
     });
 
     child.on("error", (err: Error) => {
       cleanup();
       debugLog(`Failed to spawn binary: ${err.message}`);
-      resolveOnce(null);
+      resolveOnce({ status: "error", error: err });
     });
 
     child.stdin?.write(JSON.stringify(input));
@@ -247,6 +247,23 @@ export function parseCommentOutput(output: string): Array<{ file: string; line: 
   }
 
   return comments;
+}
+
+function printCommentsByFile(
+  comments: Array<{ file: string; line: number; text: string }>
+): void {
+  const byFile = new Map<string, Array<{ line: number; text: string }>>();
+  for (const comment of comments) {
+    const existing = byFile.get(comment.file) ?? [];
+    existing.push({ line: comment.line, text: comment.text });
+    byFile.set(comment.file, existing);
+  }
+  for (const [file, fileComments] of byFile) {
+    console.log(`\n${file}`);
+    for (const c of fileComments) {
+      console.log(`  Line ${c.line}: ${c.text}`);
+    }
+  }
 }
 
 /**
@@ -479,84 +496,16 @@ export function parseGitignorePattern(line: string): GitignorePattern | null {
  * @returns RegExp for matching
  */
 function globToRegex(glob: string, anchored: boolean): RegExp {
-  // Patterns containing / (excluding trailing slash) must be anchored to gitignore root
-  const hasSlash = glob.length > 1 && glob.includes("/");
-  const effectiveAnchored = anchored || hasSlash;
-
-  let regex = "";
-  let i = 0;
-
-  while (i < glob.length) {
-    const char = glob[i];
-
-    if (char === "*" && glob[i + 1] === "*") {
-      // ** matches zero or more directories
-      if (glob[i + 2] === "/") {
-        regex += "(?:[^/]*(?:\\/|$))*";
-        i += 3;
-      } else {
-        regex += ".*";
-        i += 2;
-      }
-    } else if (char === "*") {
-      // * matches anything except /
-      regex += "[^/]*";
-      i++;
-    } else if (char === "?") {
-      // ? matches any single character except /
-      regex += "[^/]";
-      i++;
-    } else if (char === "[") {
-      // Character class
-      // Handle edge case: []abc] or []] - first ] is literal, not closing
-      let j = i + 1;
-      const content: string[] = [];
-
-      if (j < glob.length && glob[j] === "]") {
-        // ] immediately after [ is literal content, must escape in regex
-        content.push("\\]");
-        j++;
-      }
-
-      // Convert negated character class [!...] to [^...]
-      // Only if ! is the first character (position 0) in the class
-      // If ] was first (now at position 0), ! at position 1 is NOT negation
-      if (j < glob.length && glob[j] === "!" && content.length === 0) {
-        content.push("^");
-        j++;
-      }
-
-      while (j < glob.length && glob[j] !== "]") {
-        content.push(glob[j]);
-        j++;
-      }
-
-      regex += "[" + content.join("") + "]";
-      i = j + 1;
-    } else if (".[]+?^${}()|".includes(char)) {
-      // Escape regex special characters
-      regex += "\\" + char;
-      i++;
-    } else {
-      regex += char;
-      i++;
-    }
+  // Use picomatch for safe glob-to-regex conversion
+  const re = makeRe(glob, {
+    dot: true,
+    contains: !anchored,
+  });
+  if (!re) {
+    // Fallback: match nothing if pattern is invalid
+    return /(?!)/;
   }
-
-  // Add boundary handling
-  if (effectiveAnchored) {
-    // Anchored patterns must match from the start, with optional "./" prefix
-    // This handles both "dist" and "./dist" paths produced by the scanner
-    regex = "^(?:\\./)?" + regex;
-  } else {
-    // Unanchored patterns can match at any level
-    regex = "(?:^|\\/)(?:\\./)?(" + regex + ")";
-  }
-
-  // Add trailing pattern for directory matching
-  regex += "(?:\\/|$)";
-
-  return new RegExp(regex);
+  return re;
 }
 
 /**
@@ -800,16 +749,15 @@ async function checkFileForComments(
     };
 
     const result = await runCommentChecker(checkerInput, binaryPath, debugLog);
-    if (result === null) {
-      // Treat null (timeout, spawn failure, or other error) as failure
+    if (result.status === "error") {
       return { 
-        status: "failed", 
-        error: `Binary check failed for ${filePath}: timeout, spawn error, or no response` 
+        status: "failed",
+        error: result.error
       };
     }
     return {
       status: "ok",
-      comments: result.comments ?? [],
+      comments: result.result.comments ?? [],
     };
   } catch (err) {
     const message = `Error reading/checking ${filePath}`;
@@ -882,8 +830,12 @@ export default function commentCheckerExtension(pi: ExtensionAPI) {
 
     const result = await runCommentChecker(checkerInput, status.path, debug);
 
-    if (result?.comments && result.comments.length > 0) {
-      const commentList = result.comments.map((c) => `  Line ${c.line}: ${c.text}`).join("\n");
+    if (result.status === "error") {
+      debug(`Comment checker error: ${result.error}`);
+      return;
+    }
+    if (result.status === "ok" && result.result.comments && result.result.comments.length > 0) {
+      const commentList = result.result.comments.map((c) => `  Line ${c.line}: ${c.text}`).join("\n");
 
       const message = `
 ⚠️  AI Comment Detected — Self-Documenting Code Required
@@ -961,8 +913,8 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
       };
 
       const result = await runCommentChecker(checkerInput, status.path, debug);
-      if (result?.comments) {
-        allComments.push(...result.comments);
+      if (result.status === "ok" && result.result.comments) {
+        allComments.push(...result.result.comments);
       }
     }
 
@@ -1137,19 +1089,7 @@ Download prebuilt:
           console.log("-".repeat(60));
 
           
-          const byFile = new Map<string, Array<{ line: number; text: string }>>();
-          for (const comment of allComments) {
-            const existing = byFile.get(comment.file) ?? [];
-            existing.push({ line: comment.line, text: comment.text });
-            byFile.set(comment.file, existing);
-          }
-
-          for (const [file, comments] of byFile) {
-            console.log(`\n${file}`);
-            for (const c of comments) {
-              console.log(`  Line ${c.line}: ${c.text}`);
-            }
-          }
+          printCommentsByFile(allComments);
         }
       } else {
         console.log("\n" + "-".repeat(60));
@@ -1157,19 +1097,8 @@ Download prebuilt:
         console.log("-".repeat(60));
 
         // Group by file for cleaner output
-        const byFile = new Map<string, Array<{ line: number; text: string }>>();
-        for (const comment of allComments) {
-          const existing = byFile.get(comment.file) ?? [];
-          existing.push({ line: comment.line, text: comment.text });
-          byFile.set(comment.file, existing);
-        }
+        printCommentsByFile(allComments);
 
-        for (const [file, comments] of byFile) {
-          console.log(`\n${file}`);
-          for (const c of comments) {
-            console.log(`  Line ${c.line}: ${c.text}`);
-          }
-        }
 
         console.log("\n" + "-".repeat(60));
         console.log("These comments may violate the self-documenting code principle.");
