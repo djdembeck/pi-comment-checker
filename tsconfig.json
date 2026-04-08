@@ -14,6 +14,6 @@
       "@mariozechner/pi-coding-agent": ["./node_modules/@mariozechner/pi-coding-agent"]
     }
   },
-  "include": ["src/**/*.ts", "extensions/**/*.ts"],
+  "include": ["extensions/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
