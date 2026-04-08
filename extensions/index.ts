@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { accessSync, constants, readdirSync, readFileSync, statSync } from "node:fs";
-import { makeRe } from "picomatch";
 
 import { dirname, delimiter, extname, join, parse, resolve } from "node:path";
 
@@ -444,7 +443,7 @@ function parseGitignore(gitignorePath: string): GitignorePattern[] | null {
         continue;
       }
 
-      const pattern = parseGitignorePattern(trimmed, gitignorePath);
+      const pattern = parseGitignorePattern(trimmed, dirname(gitignorePath));
       if (pattern) {
         patterns.push(pattern);
       }
@@ -498,25 +497,94 @@ export function parseGitignorePattern(line: string, sourceDir: string = ""): Git
  * Handles: *, **, ?, character classes, and common patterns.
  * @param glob - Glob pattern (without leading ! or trailing /)
  * @param anchored - Whether pattern is anchored to root
+ * @param directoryOnly - Whether pattern should only match directories
  * @returns RegExp for matching
  */
 function globToRegex(glob: string, anchored: boolean, directoryOnly: boolean): RegExp {
-  // Use picomatch for safe glob-to-regex conversion
-  // For non-anchored patterns, prepend **/ to match path segments at any depth
-  // instead of using 'contains' which would match substrings
-  let patternToCompile = anchored ? glob : `**/${glob}`;
-  // For directory patterns, also allow matching contents: dir/ matches dir/*
-  if (directoryOnly && !patternToCompile.endsWith('/**')) {
-    patternToCompile += '/**';
+  // For non-anchored patterns without slashes, prepend **/ to match at any depth
+  // But for patterns containing slashes (like "src/dist"), keep them relative
+  // so they don't over-broadly match nested paths
+  const needsPrefix = !anchored && !glob.includes("/");
+  const prefix = needsPrefix ? "**/" : "";
+  const pattern = prefix + glob;
+
+  // Convert glob to regex
+  let regexStr = "^";
+  let i = 0;
+
+  while (i < pattern.length) {
+    const c = pattern[i];
+
+    if (c === "*") {
+      if (pattern[i + 1] === "*") {
+        // ** matches any number of directories
+        // **/ matches one or more directory levels
+        if (pattern[i + 2] === "/") {
+          regexStr += "(?:.*/)?";
+          i += 3;
+        } else {
+          regexStr += ".*";
+          i += 2;
+        }
+      } else {
+        // * matches anything except /
+        regexStr += "[^/]*";
+        i++;
+      }
+    } else if (c === "?") {
+      // ? matches any single character except /
+      regexStr += "[^/]";
+      i++;
+    } else if (c === "[") {
+      // Character class [abc] or [!abc]
+      // Special case: []] means match the character "]"
+      const close = pattern.indexOf("]", i + 1);
+      if (close === -1) {
+        // Unclosed bracket, treat literally
+        regexStr += "\\[";
+        i++;
+      } else {
+        // Check if this is the special case []] where ] is first char in class
+        // In gitignore, []] means "match the ] character"
+        if (close === i + 1 && pattern[i + 1] === "]") {
+          // Pattern is []] - match literal ]
+          // Skip both the first ] and the second ]
+          regexStr += "[\\]]";
+          i = close + 2;
+        } else {
+          const content = pattern.slice(i + 1, close);
+          if (content.startsWith("!")) {
+            // Negated character class [!abc]
+            regexStr += "[^" + content.slice(1) + "]";
+          } else {
+            regexStr += "[" + content + "]";
+          }
+          i = close + 1;
+        }
+      }
+    } else if (c === "." || c === "+" || c === "(" || c === ")" || c === "|" || c === "^" || c === "$") {
+      // Escape regex metacharacters
+      regexStr += "\\" + c;
+      i++;
+    } else {
+      regexStr += c;
+      i++;
+    }
   }
-  const re = makeRe(patternToCompile, {
-    dot: true,
-  });
-  if (!re) {
+
+  // For directory patterns, allow matching the directory itself and its contents
+  if (directoryOnly) {
+    regexStr += "(?:/.*)?";
+  }
+
+  regexStr += "$";
+
+  try {
+    return new RegExp(regexStr);
+  } catch {
     // Fallback: match nothing if pattern is invalid
     return /(?!)/;
   }
-  return re;
 }
 
 /**
@@ -1060,6 +1128,7 @@ Download prebuilt:
 
       // Collect files to check
       const filesToCheck: string[] = [];
+      let traversalFailures = 0;
       if (fileStats.isFile()) {
         if (isSourceFile(targetPath)) {
           filesToCheck.push(targetPath);
@@ -1070,12 +1139,12 @@ Download prebuilt:
       } else if (fileStats.isDirectory()) {
         const discoveryResult = discoverSourceFiles(targetPath, gitignoreDir, gitignorePatterns, debug);
         filesToCheck.push(...discoveryResult.files);
-        // Propagate directory traversal errors to scan results
+        // Surface directory traversal errors separately - don't add to filesToCheck
         for (const err of discoveryResult.errors) {
-          filesToCheck.push(err.path); // Add to filesToCheck so it gets counted as failed
+          traversalFailures++;
           console.error(`Directory traversal error for ${err.path}: ${err.error instanceof Error ? err.error.message : err.error}`);
         }
-        if (filesToCheck.length === 0) {
+        if (filesToCheck.length === 0 && traversalFailures === 0) {
           ctx.ui.notify("No source files found in directory", "warning");
           return;
         }
@@ -1088,7 +1157,7 @@ Download prebuilt:
       const allComments: Array<{ file: string; line: number; text: string }> = [];
       let filesChecked = 0;
       let filesWithComments = 0;
-      let failedFiles = 0;
+      let failedFiles = traversalFailures;
 
       for (const filePath of filesToCheck) {
         const result = await checkFileForComments(filePath, status.path, debug);
