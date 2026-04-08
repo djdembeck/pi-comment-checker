@@ -481,7 +481,7 @@ export function parseGitignorePattern(line: string, sourceDir: string = ""): Git
   }
 
   // Convert glob pattern to regex
-  const regex = globToRegex(pattern, anchored);
+  const regex = globToRegex(pattern, anchored, directoryOnly);
 
   return {
     pattern: line,
@@ -500,11 +500,17 @@ export function parseGitignorePattern(line: string, sourceDir: string = ""): Git
  * @param anchored - Whether pattern is anchored to root
  * @returns RegExp for matching
  */
-function globToRegex(glob: string, anchored: boolean): RegExp {
+function globToRegex(glob: string, anchored: boolean, directoryOnly: boolean): RegExp {
   // Use picomatch for safe glob-to-regex conversion
-  const re = makeRe(glob, {
+  // For non-anchored patterns, prepend **/ to match path segments at any depth
+  // instead of using 'contains' which would match substrings
+  let patternToCompile = anchored ? glob : `**/${glob}`;
+  // For directory patterns, also allow matching contents: dir/ matches dir/*
+  if (directoryOnly && !patternToCompile.endsWith('/**')) {
+    patternToCompile += '/**';
+  }
+  const re = makeRe(patternToCompile, {
     dot: true,
-    contains: !anchored,
   });
   if (!re) {
     // Fallback: match nothing if pattern is invalid
@@ -515,18 +521,19 @@ function globToRegex(glob: string, anchored: boolean): RegExp {
 
 /**
  * Checks if a path is ignored by gitignore patterns.
- * @param relativePath - Relative path from the gitignore root
+ * Each pattern is matched relative to its own sourceDir (where the .gitignore file lives).
+ * @param fullPath - Absolute path of the file/directory being checked
+ * @param basePath - Base directory for computing relative paths
  * @param isDirectory - Whether the path is a directory
  * @param patterns - Array of gitignore patterns
  * @returns True if path should be ignored
  */
 export function isIgnoredByGitignore(
-  relativePath: string,
+  fullPath: string,
+  basePath: string,
   isDirectory: boolean,
   patterns: GitignorePattern[],
 ): boolean {
-  // Normalize path to use forward slashes
-  const normalizedPath = relativePath.replace(/\\/g, "/");
   let ignored = false;
 
   for (const pattern of patterns) {
@@ -535,7 +542,28 @@ export function isIgnoredByGitignore(
       continue;
     }
 
-    const matches = pattern.regex.test(normalizedPath);
+    // Compute relative path from pattern's source directory
+    const sourceDir = pattern.sourceDir || basePath;
+    let relativePath: string;
+    // If fullPath starts with sourceDir (or sourceDir is empty), compute relative path
+    if (sourceDir === "" || fullPath.startsWith(sourceDir)) {
+      const sliceStart = sourceDir.length;
+      relativePath = fullPath.slice(sliceStart).replace(/\\/g, "/");
+      // Remove leading slash and ./ prefix
+      if (relativePath.startsWith("/") || relativePath.startsWith("./")) {
+        relativePath = relativePath.replace(/^\.?\//, "");
+      }
+    } else {
+      relativePath = fullPath;
+    }
+
+    // For anchored patterns, only apply if we're checking within the same directory as the .gitignore
+    // The relativePath calculation (slice from sourceDir) already ensures this
+    if (pattern.anchored && !fullPath.startsWith(sourceDir)) {
+      continue;
+    }
+
+    const matches = pattern.regex.test(relativePath);
 
     if (matches) {
       ignored = !pattern.negation;
@@ -697,7 +725,7 @@ export function discoverSourceFiles(
         }
 
         // Check gitignore
-        if (gitignorePatterns && isIgnoredByGitignore(relativePath, true, gitignorePatterns)) {
+        if (gitignorePatterns && isIgnoredByGitignore(fullPath, basePath, true, gitignorePatterns)) {
           debugLog?.(`Skipping (gitignore): ${relativePath}`);
           continue;
         }
@@ -707,7 +735,7 @@ export function discoverSourceFiles(
         errors.push(...subResult.errors);
       } else if (entry.isFile() && isSourceFile(entry.name)) {
         // Check gitignore for files
-        if (gitignorePatterns && isIgnoredByGitignore(relativePath, false, gitignorePatterns)) {
+        if (gitignorePatterns && isIgnoredByGitignore(fullPath, basePath, false, gitignorePatterns)) {
           debugLog?.(`Skipping (gitignore): ${relativePath}`);
           continue;
         }
@@ -1044,6 +1072,7 @@ Download prebuilt:
         filesToCheck.push(...discoveryResult.files);
         // Propagate directory traversal errors to scan results
         for (const err of discoveryResult.errors) {
+          filesToCheck.push(err.path); // Add to filesToCheck so it gets counted as failed
           console.error(`Directory traversal error for ${err.path}: ${err.error instanceof Error ? err.error.message : err.error}`);
         }
         if (filesToCheck.length === 0) {

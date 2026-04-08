@@ -329,14 +329,14 @@ describe("parseGitignorePattern", () => {
 describe("isIgnoredByGitignore", () => {
   it("matches simple wildcard pattern", () => {
     const patterns = [parseGitignorePattern("*.log")!];
-    expect(isIgnoredByGitignore("debug.log", false, patterns)).toBe(true);
-    expect(isIgnoredByGitignore("src/app.ts", false, patterns)).toBe(false);
+    expect(isIgnoredByGitignore("debug.log", "", false, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("src/app.ts", "", false, patterns)).toBe(false);
   });
 
   it("matches directory pattern", () => {
     const patterns = [parseGitignorePattern("node_modules/")!];
-    expect(isIgnoredByGitignore("node_modules", true, patterns)).toBe(true);
-    expect(isIgnoredByGitignore("node_modules/package", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("node_modules", "", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("node_modules/package", "", true, patterns)).toBe(true);
   });
 
   it("handles negation", () => {
@@ -344,37 +344,37 @@ describe("isIgnoredByGitignore", () => {
       parseGitignorePattern("*.log")!,
       parseGitignorePattern("!important.log")!,
     ];
-    expect(isIgnoredByGitignore("debug.log", false, patterns)).toBe(true);
-    expect(isIgnoredByGitignore("important.log", false, patterns)).toBe(false);
+    expect(isIgnoredByGitignore("debug.log", "", false, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("important.log", "", false, patterns)).toBe(false);
   });
 
   it("matches anchored pattern from root", () => {
     const patterns = [parseGitignorePattern("/dist")!];
     // Scanner passes paths like "./dist" - anchored pattern should match only at root
-    expect(isIgnoredByGitignore("./dist", true, patterns)).toBe(true);
-    expect(isIgnoredByGitignore("./src/dist", true, patterns)).toBe(false);
+    expect(isIgnoredByGitignore("./dist", "", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("./src/dist", "", true, patterns)).toBe(false);
   });
 
   it("matches anchored pattern for nested directories", () => {
     const patterns = [parseGitignorePattern("/dist")!];
     // Anchored pattern "/dist" should NOT match "./src/dist" (nested)
-    expect(isIgnoredByGitignore("./src/dist", true, patterns)).toBe(false);
-    expect(isIgnoredByGitignore("./nested/deep/dist", true, patterns)).toBe(false);
+    expect(isIgnoredByGitignore("./src/dist", "", true, patterns)).toBe(false);
+    expect(isIgnoredByGitignore("./nested/deep/dist", "", true, patterns)).toBe(false);
   });
 
   it("matches double-star pattern", () => {
     const patterns = [parseGitignorePattern("**/node_modules")!];
-    expect(isIgnoredByGitignore("node_modules", true, patterns)).toBe(true);
-    expect(isIgnoredByGitignore("src/node_modules", true, patterns)).toBe(true);
-    expect(isIgnoredByGitignore("deep/nested/node_modules", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("node_modules", "", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("src/node_modules", "", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("deep/nested/node_modules", "", true, patterns)).toBe(true);
   });
 
   it("skips directory-only patterns for files", () => {
     const patterns = [parseGitignorePattern("build/")!];
     // Directory-only pattern should not match files
-    expect(isIgnoredByGitignore("build", false, patterns)).toBe(false);
+    expect(isIgnoredByGitignore("build", "", false, patterns)).toBe(false);
     // But should match directories
-    expect(isIgnoredByGitignore("build", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("build", "", true, patterns)).toBe(true);
   });
 });
 
@@ -392,7 +392,8 @@ describe("discoverSourceFiles integration", () => {
 
       // Test with anchored pattern "/dist" - should exclude ./dist
       const patterns = [parseGitignorePattern("/dist")!];
-      const files = discoverSourceFiles(tmpDir, tmpDir, patterns);
+      const discoveryResult = discoverSourceFiles(tmpDir, tmpDir, patterns);
+      const files = discoveryResult.files;
 
       // Should find main.ts but not dist/test.ts
       expect(files.length).toBe(1);
@@ -415,7 +416,8 @@ describe("discoverSourceFiles integration", () => {
 
       // Test with anchored pattern "/dist" - should NOT exclude ./src/dist (nested)
       const patterns = [parseGitignorePattern("/dist")!];
-      const files = discoverSourceFiles(tmpDir, tmpDir, patterns);
+      const discoveryResult = discoverSourceFiles(tmpDir, tmpDir, patterns);
+      const files = discoveryResult.files;
 
       // Should find both - src/main.ts and src/dist/test.ts since /dist only matches root
       expect(files.length).toBe(2);
