@@ -698,7 +698,9 @@ function findGitignoreAncestors(startDir: string): Array<{ path: string; pattern
       statSync(gitignorePath);
       const patterns = parseGitignore(gitignorePath);
       if (patterns) {
-        // Insert at beginning so closest (most specific) patterns are first
+        // Insert at beginning: unshift puts root-level (less specific) patterns first,
+        // while closer (more specific) patterns end up later. This ordering is intentional
+        // because in gitignore semantics, later rules override earlier ones.
         result.unshift({ path: gitignorePath, patterns });
       }
     } catch {
@@ -781,14 +783,15 @@ export function discoverSourceFiles(
         ? fullPath.slice(basePath.length).replace(/\\/g, "/").replace(/^\//, "")
         : fullPath;
 
+      // Handle symlinks first to avoid circular references and unreachable code
+      if (entry.isSymbolicLink()) {
+        // Skip symlinks to avoid circular references
+        continue;
+      }
+
       if (entry.isDirectory()) {
         // Skip VCS directories always
         if (SKIP_DIRECTORIES.has(entry.name)) {
-          continue;
-        }
-
-        // Skip symlinks to avoid circular references
-        if (entry.isSymbolicLink()) {
           continue;
         }
 
@@ -1199,19 +1202,14 @@ Download prebuilt:
           console.log("\n" + "-".repeat(60));
           console.log("PROBLEMATIC COMMENTS FOUND (in successfully checked files):");
           console.log("-".repeat(60));
-
-          
           printCommentsByFile(allComments);
         }
+        console.log("=".repeat(60));
       } else {
         console.log("\n" + "-".repeat(60));
         console.log("PROBLEMATIC COMMENTS FOUND:");
         console.log("-".repeat(60));
-
-        // Group by file for cleaner output
         printCommentsByFile(allComments);
-
-
         console.log("\n" + "-".repeat(60));
         console.log("These comments may violate the self-documenting code principle.");
         console.log("Consider:");
@@ -1220,7 +1218,6 @@ Download prebuilt:
         console.log("  - Letting the code speak for itself");
         console.log("\nAllowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint-disable), shebangs");
         console.log("=".repeat(60));
-
         ctx.ui.notify(`Found ${allComments.length} problematic comment(s) in ${filesWithComments} file(s)`, "warning");
       }
     },
