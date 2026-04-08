@@ -191,7 +191,10 @@ async function runCommentChecker(
         const comments = parseCommentOutput(stderr + '\n' + stdout);
         if (!comments || comments.length === 0) {
           debugLog('Comment-checker returned exit code 2 but with no comments, treating as fail');
-          resolveOnce({ status: "ok", result: { comments: [] }, source: "clean" });
+          resolveOnce({
+            status: "error",
+            error: new Error(`comment-checker exit code 2 with no parsed comments (possible blocked file or parsing issue). stderr: ${stderr}, stdout: ${stdout}`),
+          });
         } else {
           resolveOnce({ status: "ok", result: { comments }, source: "with-comments" });
         }
@@ -421,6 +424,7 @@ interface GitignorePattern {
   directoryOnly: boolean;
   anchored: boolean;
   regex: RegExp;
+  sourceDir: string;
 }
 
 /**
@@ -440,7 +444,7 @@ function parseGitignore(gitignorePath: string): GitignorePattern[] | null {
         continue;
       }
 
-      const pattern = parseGitignorePattern(trimmed);
+      const pattern = parseGitignorePattern(trimmed, gitignorePath);
       if (pattern) {
         patterns.push(pattern);
       }
@@ -457,7 +461,7 @@ function parseGitignore(gitignorePath: string): GitignorePattern[] | null {
  * @param line - Single line from .gitignore
  * @returns Parsed pattern or null if invalid
  */
-export function parseGitignorePattern(line: string): GitignorePattern | null {
+export function parseGitignorePattern(line: string, sourceDir: string = ""): GitignorePattern | null {
   let pattern = line;
   const negation = pattern.startsWith("!");
   if (negation) {
@@ -485,6 +489,7 @@ export function parseGitignorePattern(line: string): GitignorePattern | null {
     directoryOnly,
     anchored,
     regex,
+    sourceDir,
   };
 }
 
@@ -667,8 +672,9 @@ export function discoverSourceFiles(
   basePath: string = dir,
   gitignorePatterns?: GitignorePattern[] | null,
   debugLog?: (...args: unknown[]) => void,
-): string[] {
+): { files: string[]; errors: Array<{ path: string; error: Error | string }> } {
   const files: string[] = [];
+  const errors: Array<{ path: string; error: Error | string }> = [];
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -696,7 +702,9 @@ export function discoverSourceFiles(
           continue;
         }
 
-        files.push(...discoverSourceFiles(fullPath, basePath, gitignorePatterns, debugLog));
+        const subResult = discoverSourceFiles(fullPath, basePath, gitignorePatterns, debugLog);
+        files.push(...subResult.files);
+        errors.push(...subResult.errors);
       } else if (entry.isFile() && isSourceFile(entry.name)) {
         // Check gitignore for files
         if (gitignorePatterns && isIgnoredByGitignore(relativePath, false, gitignorePatterns)) {
@@ -709,10 +717,11 @@ export function discoverSourceFiles(
   } catch (err) {
     // Surface directory traversal errors with context instead of silently dropping
     const errorContext = wrapWithContext(err, `Failed to read directory ${dir}`);
+    errors.push({ path: dir, error: errorContext });
     debugLog?.(`Directory traversal error: ${errorContext instanceof Error ? errorContext.message : errorContext}`);
   }
 
-  return files;
+  return { files, errors };
 }
 
 /**
@@ -1031,7 +1040,12 @@ Download prebuilt:
           return;
         }
       } else if (fileStats.isDirectory()) {
-        filesToCheck.push(...discoverSourceFiles(targetPath, gitignoreDir, gitignorePatterns, debug));
+        const discoveryResult = discoverSourceFiles(targetPath, gitignoreDir, gitignorePatterns, debug);
+        filesToCheck.push(...discoveryResult.files);
+        // Propagate directory traversal errors to scan results
+        for (const err of discoveryResult.errors) {
+          console.error(`Directory traversal error for ${err.path}: ${err.error instanceof Error ? err.error.message : err.error}`);
+        }
         if (filesToCheck.length === 0) {
           ctx.ui.notify("No source files found in directory", "warning");
           return;
