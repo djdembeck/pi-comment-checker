@@ -1,4 +1,4 @@
-# @djdembeck/pi-comment-checker
+# pi-comment-checker
 
 Pi extension that enforces self-documenting code by warning when unnecessary comments are written. Integrates [go-claude-code-comment-checker](https://github.com/code-yeongyu/go-claude-code-comment-checker).
 
@@ -26,7 +26,7 @@ Verify: `comment-checker --help`
 ### 2. Install the Pi Extension
 
 ```bash
-pi install git:github.com/djdembeck/pi-comment-checker
+pi install pi-comment-checker
 ```
 
 <details>
@@ -53,7 +53,38 @@ For full details on comment detection rules, binary configuration, and advanced 
 
 ## Commands
 
-- `/check-comments` — Confirm extension is loaded
+### `/check-comments` — Check extension status
+
+Show binary location and setup help:
+
+`/check-comments`
+
+### `/check-comments <path>` — Scan files for problematic comments
+
+Retroactively check existing files for unnecessary comments:
+
+```bash
+# Check a single file
+/check-comments src/utils.ts
+
+# Check all source files in a directory (recursive)
+/check-comments src/
+
+# Check the entire project
+/check-comments .
+```
+
+**Output includes:**
+- Files scanned count
+- Files with problematic comments
+- Total comments found
+- Grouped output by file with line numbers
+
+**Gitignore support:** The extension automatically finds and respects your project's `.gitignore` file when scanning directories. Patterns like `*.log`, `node_modules/`, `dist/`, and `**/vendor` are honored to avoid checking files you've already excluded from version control.
+
+**Always skipped:** `.git`, `.svn`, `.hg` (VCS directories)
+
+**Supported file extensions:** `.js`, `.jsx`, `.ts`, `.tsx`, `.py`, `.go`, `.rs`, `.java`, `.kt`, `.c`, `.cpp`, `.h`, `.rb`, `.php`, `.swift`, `.cs`, and many more.
 
 ## Related
 
