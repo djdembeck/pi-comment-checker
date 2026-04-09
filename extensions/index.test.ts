@@ -100,8 +100,12 @@ describe("extractFilePath", () => {
 });
 
 describe("isValidEdit", () => {
-  it("returns true for valid edit object", () => {
+  it("returns true for valid edit object with snake_case", () => {
     expect(isValidEdit({ old_string: "old", new_string: "new" })).toBe(true);
+  });
+
+  it("returns true for valid edit object with camelCase (Pi format)", () => {
+    expect(isValidEdit({ oldText: "old", newText: "new" })).toBe(true);
   });
 
   it("returns false for null", () => {
@@ -133,7 +137,7 @@ describe("buildCheckerInput", () => {
       content: "file content",
     });
     expect(result).toEqual({
-      tool_name: "write",
+      tool_name: "Write",
       file_path: "/test.ts",
       tool_input: {
         file_path: "/test.ts",
@@ -142,14 +146,13 @@ describe("buildCheckerInput", () => {
     });
   });
 
-  it("builds input for edit tool with camelCase", () => {
+  it("builds input for edit tool with Pi normalized format (edits array)", () => {
     const result = buildCheckerInput("edit", {
-      filePath: "/test.ts",
-      oldString: "old",
-      newString: "new",
+      path: "/test.ts",
+      edits: [{ oldText: "old", newText: "new" }],
     });
     expect(result).toEqual({
-      tool_name: "edit",
+      tool_name: "Edit",
       file_path: "/test.ts",
       tool_input: {
         file_path: "/test.ts",
@@ -159,14 +162,13 @@ describe("buildCheckerInput", () => {
     });
   });
 
-  it("builds input for edit tool with snake_case", () => {
+  it("builds input for edit tool with mixed snake_case in edits array", () => {
     const result = buildCheckerInput("edit", {
-      file_path: "/test.ts",
-      old_string: "old",
-      new_string: "new",
+      path: "/test.ts",
+      edits: [{ old_string: "old", new_string: "new" }],
     });
     expect(result).toEqual({
-      tool_name: "edit",
+      tool_name: "Edit",
       file_path: "/test.ts",
       tool_input: {
         file_path: "/test.ts",
@@ -185,7 +187,28 @@ describe("buildCheckerInput", () => {
       ],
     });
     expect(result).toEqual({
-      tool_name: "multiedit",
+      tool_name: "MultiEdit",
+      file_path: "/test.ts",
+      tool_input: {
+        file_path: "/test.ts",
+        edits: [
+          { old_string: "old1", new_string: "new1" },
+          { old_string: "old2", new_string: "new2" },
+        ],
+      },
+    });
+  });
+
+  it("builds input for multiedit tool with camelCase edits (Pi format)", () => {
+    const result = buildCheckerInput("multiedit", {
+      path: "/test.ts",
+      edits: [
+        { oldText: "old1", newText: "new1" },
+        { oldText: "old2", newText: "new2" },
+      ],
+    });
+    expect(result).toEqual({
+      tool_name: "MultiEdit",
       file_path: "/test.ts",
       tool_input: {
         file_path: "/test.ts",
@@ -202,12 +225,18 @@ describe("buildCheckerInput", () => {
     expect(result).toBeNull();
   });
 
-  it("returns null for edit without required strings", () => {
+  it("returns null for edit with empty edits array", () => {
     expect(
-      buildCheckerInput("edit", { filePath: "/test.ts", oldString: "old" }),
+      buildCheckerInput("edit", { path: "/test.ts", edits: [] }),
     ).toBeNull();
+  });
+
+  it("returns null for edit with invalid edits entry", () => {
     expect(
-      buildCheckerInput("edit", { filePath: "/test.ts", newString: "new" }),
+      buildCheckerInput("edit", {
+        path: "/test.ts",
+        edits: [{ oldText: "old" }], // missing newText
+      }),
     ).toBeNull();
   });
 
