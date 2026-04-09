@@ -312,6 +312,24 @@ export function isValidEdit(
 }
 
 /**
+ * Normalizes an edit object to snake_case format for the comment-checker binary.
+ * Accepts both snake_case (old_string/new_string) and camelCase (oldText/newText) formats.
+ * @param edit - Edit object with either snake_case or camelCase fields
+ * @returns Edit object with snake_case fields
+ */
+function normalizeEditToSnakeCase(
+  edit: { old_string: string; new_string: string } | { oldText: string; newText: string }
+): { old_string: string; new_string: string } {
+  if ('old_string' in edit && 'new_string' in edit) {
+    return { old_string: edit.old_string, new_string: edit.new_string };
+  }
+  return {
+    old_string: edit.oldText,
+    new_string: edit.newText,
+  };
+}
+
+/**
  * Builds the input structure for the comment-checker binary based on tool name and arguments.
  * Supports write, edit, and multiedit tools with appropriate field mapping.
  * @param toolName - Name of the Pi tool (write, edit, or multiedit)
@@ -336,7 +354,6 @@ export function buildCheckerInput(
     }
     toolInput.content = content;
   } else if (toolName === "edit") {
-    // Pi normalized format: edits array with single entry
     const edits = args.edits;
     if (!Array.isArray(edits) || edits.length === 0) {
       return null;
@@ -345,32 +362,20 @@ export function buildCheckerInput(
     if (!isValidEdit(firstEdit)) {
       return null;
     }
-    // Map oldText/newText to old_string/new_string for checker
-    const e = firstEdit as Record<string, unknown>;
-    const editOld = e.old_string ?? e.oldText;
-    const editNew = e.new_string ?? e.newText;
-    if (typeof editOld !== "string" || typeof editNew !== "string") {
-      return null;
-    }
-    toolInput.old_string = editOld;
-    toolInput.new_string = editNew;
+    
+    const normalized = normalizeEditToSnakeCase(firstEdit);
+    toolInput.old_string = normalized.old_string;
+    toolInput.new_string = normalized.new_string;
   } else if (toolName === "multiedit") {
     const edits = args.edits;
     if (!Array.isArray(edits) || edits.length === 0) {
       return null;
     }
-    // Validate each edit has required properties
     if (!edits.every(isValidEdit)) {
       return null;
     }
-    // Normalize all edits to snake_case for checker
-    toolInput.edits = edits.map((e) => {
-      const edit = e as Record<string, unknown>;
-      return {
-        old_string: edit.old_string ?? edit.oldText,
-        new_string: edit.new_string ?? edit.newText,
-      };
-    });
+    
+    toolInput.edits = edits.map(normalizeEditToSnakeCase);
   }
 
   // Normalize tool_name to proper case for checker
