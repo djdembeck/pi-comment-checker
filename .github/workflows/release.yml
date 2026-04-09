@@ -114,18 +114,18 @@ jobs:
           echo "" >> changes.md
 
           if [ "$LATEST" = "v0.0.0" ]; then
-            COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+            COMMIT_COUNT=$(git rev-list --no-merges --count HEAD 2>/dev/null || echo "0")
             if [ "$COMMIT_COUNT" -eq 0 ]; then
               echo "- Initial release" >> changes.md
             else
-              git log --pretty=format:"- %s (%h)" HEAD >> changes.md
+              git log --no-merges --pretty=format:"- %s (%h)" HEAD >> changes.md
             fi
           else
-            COMMIT_COUNT=$(git rev-list --count $LATEST..HEAD 2>/dev/null || echo "0")
+            COMMIT_COUNT=$(git rev-list --no-merges --count $LATEST..HEAD 2>/dev/null || echo "0")
             if [ "$COMMIT_COUNT" -eq 0 ]; then
               echo "- No new commits since $LATEST" >> changes.md
             else
-              git log --pretty=format:"- %s (%h)" $LATEST..HEAD >> changes.md
+              git log --no-merges --pretty=format:"- %s (%h)" $LATEST..HEAD >> changes.md
             fi
           fi
 
