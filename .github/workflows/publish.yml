@@ -5,11 +5,6 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag to publish (e.g., v1.0.0)'
-        required: true
-        type: string
 
 jobs:
   publish:
@@ -20,21 +15,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag }}
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-
-      - name: Checkout
-        uses: actions/checkout@v4
-        if: ${{ github.event_name != 'workflow_dispatch' }}
-
-      - name: Validate tag
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: |
-          if [[ ! "${{ inputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Error: Tag must match pattern v* (e.g., v1.0.0)"
-            exit 1
-          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -57,6 +37,4 @@ jobs:
         run: npm run build
 
       - name: Publish to npm
-        # Trusted publishing uses OIDC - no NPM_TOKEN needed
-        # publishConfig.access is set in package.json
-        run: npm publish
+        run: npm publish --access public
