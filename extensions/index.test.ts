@@ -108,6 +108,10 @@ describe("isValidEdit", () => {
     expect(isValidEdit({ oldText: "old", newText: "new" })).toBe(true);
   });
 
+  it("returns true for valid edit object with old_text/new_text (oh-my-pi format)", () => {
+    expect(isValidEdit({ old_text: "old", new_text: "new" })).toBe(true);
+  });
+
   it("returns false for null", () => {
     expect(isValidEdit(null)).toBe(false);
   });
@@ -131,9 +135,39 @@ describe("isValidEdit", () => {
 });
 
 describe("buildCheckerInput", () => {
-  it("builds input for write tool", () => {
+  it("builds input for write tool with Pi runtime format (path key)", () => {
+    const result = buildCheckerInput("write", {
+      path: "/test.ts",
+      content: "file content",
+    });
+    expect(result).toEqual({
+      tool_name: "Write",
+      file_path: "/test.ts",
+      tool_input: {
+        file_path: "/test.ts",
+        content: "file content",
+      },
+    });
+  });
+
+  it("builds input for write tool with filePath key", () => {
     const result = buildCheckerInput("write", {
       filePath: "/test.ts",
+      content: "file content",
+    });
+    expect(result).toEqual({
+      tool_name: "Write",
+      file_path: "/test.ts",
+      tool_input: {
+        file_path: "/test.ts",
+        content: "file content",
+      },
+    });
+  });
+
+  it("builds input for write tool with file_path key (snake_case)", () => {
+    const result = buildCheckerInput("write", {
+      file_path: "/test.ts",
       content: "file content",
     });
     expect(result).toEqual({
@@ -178,6 +212,21 @@ describe("buildCheckerInput", () => {
     });
   });
 
+  it("builds input for edit tool with oh-my-pi format (path inside edits, old_text/new_text)", () => {
+    const result = buildCheckerInput("edit", {
+      edits: [{ path: "/test.ts", old_text: "old", new_text: "new" }],
+    });
+    expect(result).toEqual({
+      tool_name: "Edit",
+      file_path: "/test.ts",
+      tool_input: {
+        file_path: "/test.ts",
+        old_string: "old",
+        new_string: "new",
+      },
+    });
+  });
+
   it("builds input for multiedit tool", () => {
     const result = buildCheckerInput("multiedit", {
       filePath: "/test.ts",
@@ -205,6 +254,47 @@ describe("buildCheckerInput", () => {
       edits: [
         { oldText: "old1", newText: "new1" },
         { oldText: "old2", newText: "new2" },
+      ],
+    });
+    expect(result).toEqual({
+      tool_name: "MultiEdit",
+      file_path: "/test.ts",
+      tool_input: {
+        file_path: "/test.ts",
+        edits: [
+          { old_string: "old1", new_string: "new1" },
+          { old_string: "old2", new_string: "new2" },
+        ],
+      },
+    });
+  });
+
+  it("builds input for edit tool with multiple edits (uses MultiEdit format)", () => {
+    const result = buildCheckerInput("edit", {
+      path: "/test.ts",
+      edits: [
+        { oldText: "old1", newText: "new1" },
+        { oldText: "old2", newText: "new2" },
+      ],
+    });
+    expect(result).toEqual({
+      tool_name: "MultiEdit",
+      file_path: "/test.ts",
+      tool_input: {
+        file_path: "/test.ts",
+        edits: [
+          { old_string: "old1", new_string: "new1" },
+          { old_string: "old2", new_string: "new2" },
+        ],
+      },
+    });
+  });
+
+  it("builds input for edit tool with multiple edits in oh-my-pi format (path inside edits, old_text/new_text)", () => {
+    const result = buildCheckerInput("edit", {
+      edits: [
+        { path: "/test.ts", old_text: "old1", new_text: "new1" },
+        { path: "/test.ts", old_text: "old2", new_text: "new2" },
       ],
     });
     expect(result).toEqual({
