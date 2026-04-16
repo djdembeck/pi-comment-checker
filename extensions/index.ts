@@ -320,9 +320,12 @@ export function isValidEdit(
 
 /**
  * Normalizes an edit object to snake_case format for the comment-checker binary.
- * Accepts both snake_case (old_string/new_string) and camelCase (oldText/newText) formats.
- * @param edit - Edit object with either snake_case or camelCase fields
- * @returns Edit object with snake_case fields
+ * Accepts three input formats:
+ * - snake_case: old_string/new_string
+ * - "oh-my-pi" style: old_text/new_text
+ * - camelCase: oldText/newText
+ * @param edit - Edit object with any of the supported field naming conventions
+ * @returns Edit object normalized to snake_case fields (old_string/new_string)
  */
 function normalizeEditToSnakeCase(
   edit: { old_string: string; new_string: string } | { old_text: string; new_text: string } | { oldText: string; newText: string }
