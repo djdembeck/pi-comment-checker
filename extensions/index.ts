@@ -382,6 +382,13 @@ export function buildCheckerInput(
     }
     if (!filePath) return null;
 
+    for (const edit of edits) {
+      const editPath = extractFilePath(edit as Record<string, unknown>);
+      if (editPath && editPath !== filePath) {
+        return null;
+      }
+    }
+
     const toolInput: CommentCheckerInput["tool_input"] = {
       file_path: filePath,
     };
