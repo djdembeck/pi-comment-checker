@@ -1,20 +1,46 @@
 name: Publish to npm
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: read
       id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || '' }}
+          fetch-depth: 0
+
+      - name: Find release tag
+        id: tag
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          if [ -n "$SHA" ]; then
+            TAG=$(git describe --tags --exact-match "$SHA" 2>/dev/null || echo "")
+            if [ -z "$TAG" ]; then
+              echo "Error: No tag found for commit $SHA — release may not have created a tag yet"
+              exit 1
+            fi
+          else
+            # Fallback for workflow_dispatch: use the latest tag
+            TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -z "$TAG" ]; then
+              echo "Error: No tags found in repository"
+              exit 1
+            fi
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Publishing tag: $TAG"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -37,4 +63,4 @@ jobs:
         run: npm run build
 
       - name: Publish to npm
-        run: npm publish --access public
+        run: npm publish --provenance --access public
