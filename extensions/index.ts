@@ -297,14 +297,18 @@ export function extractFilePath(args: Record<string, unknown>): string | undefin
  */
 export function isValidEdit(
   edit: unknown,
-): edit is { old_string: string; new_string: string } | { oldText: string; newText: string } {
+): edit is
+  | { old_string: string; new_string: string }
+  | { old_text: string; new_text: string }
+  | { oldText: string; newText: string } {
   if (typeof edit !== "object" || edit === null) return false;
   const e = edit as Record<string, unknown>;
-  // Accept snake_case format (checker native format)
   if (typeof e.old_string === "string" && typeof e.new_string === "string") {
     return true;
   }
-  // Accept camelCase format (Pi runtime normalized format)
+  if (typeof e.old_text === "string" && typeof e.new_text === "string") {
+    return true;
+  }
   if (typeof e.oldText === "string" && typeof e.newText === "string") {
     return true;
   }
@@ -318,10 +322,13 @@ export function isValidEdit(
  * @returns Edit object with snake_case fields
  */
 function normalizeEditToSnakeCase(
-  edit: { old_string: string; new_string: string } | { oldText: string; newText: string }
+  edit: { old_string: string; new_string: string } | { old_text: string; new_text: string } | { oldText: string; newText: string }
 ): { old_string: string; new_string: string } {
   if ('old_string' in edit && 'new_string' in edit) {
     return { old_string: edit.old_string, new_string: edit.new_string };
+  }
+  if ('old_text' in edit && 'new_text' in edit) {
+    return { old_string: edit.old_text, new_string: edit.new_text };
   }
   return {
     old_string: edit.oldText,
@@ -340,33 +347,25 @@ export function buildCheckerInput(
   toolName: string,
   args: Record<string, unknown>,
 ): CommentCheckerInput | null {
-  const filePath = extractFilePath(args);
-  if (!filePath) return null;
-
-  const toolInput: CommentCheckerInput["tool_input"] = {
-    file_path: filePath,
-  };
+  let filePath = extractFilePath(args);
 
   if (toolName === "write") {
+    if (!filePath) return null;
     const content = getStringArg("content", args);
     if (content === undefined) {
       return null;
     }
-    toolInput.content = content;
-  } else if (toolName === "edit") {
-    const edits = args.edits;
-    if (!Array.isArray(edits) || edits.length === 0) {
-      return null;
-    }
-    const firstEdit = edits[0];
-    if (!isValidEdit(firstEdit)) {
-      return null;
-    }
-    
-    const normalized = normalizeEditToSnakeCase(firstEdit);
-    toolInput.old_string = normalized.old_string;
-    toolInput.new_string = normalized.new_string;
-  } else if (toolName === "multiedit") {
+    return {
+      tool_name: "Write",
+      file_path: filePath,
+      tool_input: {
+        file_path: filePath,
+        content,
+      },
+    };
+  }
+
+  if (toolName === "edit" || toolName === "multiedit") {
     const edits = args.edits;
     if (!Array.isArray(edits) || edits.length === 0) {
       return null;
@@ -374,24 +373,38 @@ export function buildCheckerInput(
     if (!edits.every(isValidEdit)) {
       return null;
     }
-    
-    toolInput.edits = edits.map(normalizeEditToSnakeCase);
+
+    if (!filePath) {
+      const firstEdit = edits[0] as Record<string, unknown> | undefined;
+      if (firstEdit) {
+        filePath = extractFilePath(firstEdit);
+      }
+    }
+    if (!filePath) return null;
+
+    const toolInput: CommentCheckerInput["tool_input"] = {
+      file_path: filePath,
+    };
+
+    if (edits.length === 1) {
+      const normalized = normalizeEditToSnakeCase(edits[0]);
+      toolInput.old_string = normalized.old_string;
+      toolInput.new_string = normalized.new_string;
+    } else {
+      toolInput.edits = edits.map(normalizeEditToSnakeCase);
+    }
+
+    const hasMultiEdits = edits.length > 1;
+    const normalizedToolName = hasMultiEdits ? "MultiEdit" : "Edit";
+
+    return {
+      tool_name: normalizedToolName,
+      file_path: filePath,
+      tool_input: toolInput,
+    };
   }
 
-  // Normalize tool_name to proper case for checker
-  // MultiEdit has special capitalization, others are just Title case
-  let normalizedToolName: string;
-  if (toolName === "multiedit") {
-    normalizedToolName = "MultiEdit";
-  } else {
-    normalizedToolName = toolName.charAt(0).toUpperCase() + toolName.slice(1);
-  }
-
-  return {
-    tool_name: normalizedToolName,
-    file_path: filePath,
-    tool_input: toolInput,
-  };
+  return null;
 }
 
 /**
