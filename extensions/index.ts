@@ -291,9 +291,12 @@ export function extractFilePath(args: Record<string, unknown>): string | undefin
 
 /**
  * Type guard to validate that an object is a valid edit with required string properties.
- * Accepts both snake_case (old_string/new_string) and camelCase (oldText/newText) fields.
+ * Accepts three formats:
+ * - snake_case: old_string/new_string
+ * - "oh-my-pi" style: old_text/new_text
+ * - camelCase: oldText/newText
  * @param edit - Value to validate as an edit object
- * @returns True if edit has both old and new strings in either format
+ * @returns True if edit has both old and new strings in any supported format
  */
 export function isValidEdit(
   edit: unknown,
