@@ -38,8 +38,9 @@ jobs:
             git checkout "$TAG"
           fi
 
+          FINAL_VERSION=$(node -p "require('./package.json').version")
           echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "Publishing tag: $TAG (package.json version: $(node -p \"require('./package.json').version\"))"
+          echo "Publishing tag: $TAG (package.json version: $FINAL_VERSION)"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
