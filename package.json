@@ -1,6 +1,6 @@
 {
   "name": "pi-comment-checker",
-  "version": "0.1.1",
+  "version": "0.2.2",
   "description": "Pi extension that enforces self-documenting code by detecting and blocking unnecessary comments",
   "keywords": [
     "pi-package",
