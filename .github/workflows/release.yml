@@ -139,14 +139,29 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
+      - name: Bump version in package.json
+        id: bump_package
+        if: steps.check_tag.outputs.has_tag == 'false'
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          VERSION_NO_V="${NEW_VERSION#v}"
+
+          npm version "$VERSION_NO_V" --no-git-tag-version
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add package.json package-lock.json
+          git commit -m "chore: release $NEW_VERSION"
+          git push origin HEAD:main
+
+          echo "Bumped package.json to $VERSION_NO_V and committed to main"
+
       - name: Create and push git tag
         id: tag
         if: steps.check_tag.outputs.has_tag == 'false'
         run: |
           NEW_VERSION="${{ steps.version.outputs.new_version }}"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION"
 
@@ -156,7 +171,7 @@ jobs:
           fi
 
           echo "created_tag=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "Created and pushed tag: $NEW_VERSION"
+          echo "Created and pushed tag: $NEW_VERSION on commit $(git rev-parse HEAD)"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

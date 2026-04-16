@@ -18,29 +18,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || '' }}
           fetch-depth: 0
 
       - name: Find release tag
         id: tag
         run: |
-          SHA="${{ github.event.workflow_run.head_sha }}"
-          if [ -n "$SHA" ]; then
-            TAG=$(git describe --tags --exact-match "$SHA" 2>/dev/null || echo "")
-            if [ -z "$TAG" ]; then
-              echo "Error: No tag found for commit $SHA — release may not have created a tag yet"
-              exit 1
-            fi
-          else
-            # Fallback for workflow_dispatch: use the latest tag
-            TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-            if [ -z "$TAG" ]; then
-              echo "Error: No tags found in repository"
-              exit 1
-            fi
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$TAG" ]; then
+            echo "Error: No tags found in repository"
+            exit 1
           fi
+
+          VERSION="${TAG#v}"
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+
+          if [ "$VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Warning: Tag $TAG does not match package.json version $PACKAGE_VERSION"
+            echo "Checking out tag $TAG to ensure correct version is published"
+            git checkout "$TAG"
+          fi
+
           echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "Publishing tag: $TAG"
+          echo "Publishing tag: $TAG (package.json version: $(node -p \"require('./package.json').version\"))"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
