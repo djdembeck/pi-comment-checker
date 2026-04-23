@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import {
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import commentCheckerExtension, {
   parseCommentOutput,
   extractFilePath,
   isValidEdit,
@@ -8,6 +8,8 @@ import {
   parseGitignorePattern,
   isIgnoredByGitignore,
   discoverSourceFiles,
+  formatCommentMessage,
+  buildApplyPatchCheckerInput,
 } from "./index.js";
 import { mkdir, writeFile, rm, mkdtemp } from "fs/promises";
 import { join, dirname, relative } from "path";
@@ -363,6 +365,17 @@ describe("isValidFileChange", () => {
     ).toBe(true);
   });
 
+  it("returns true when before and type are present", () => {
+    expect(
+      isValidFileChange({
+        filePath: "/test.ts",
+        before: "old content",
+        after: "new content",
+        type: "update",
+      }),
+    ).toBe(true);
+  });
+
   it("returns false for null", () => {
     expect(isValidFileChange(null)).toBe(false);
   });
@@ -384,6 +397,26 @@ describe("isValidFileChange", () => {
         filePath: "/test.ts",
         movePath: 123,
         after: "content",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when before is not a string", () => {
+    expect(
+      isValidFileChange({
+        filePath: "/test.ts",
+        before: 123,
+        after: "content",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when type is not a string", () => {
+    expect(
+      isValidFileChange({
+        filePath: "/test.ts",
+        after: "content",
+        type: 123,
       }),
     ).toBe(false);
   });
@@ -547,5 +580,370 @@ describe("discoverSourceFiles integration", () => {
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("formatCommentMessage", () => {
+  it("formats single comment message", () => {
+    const comments = [{ file: "/test.ts", line: 5, text: "// TODO: fix this" }];
+    const result = formatCommentMessage(comments, "/test.ts");
+    expect(result).toContain("AI Comment Detected");
+    expect(result).toContain("/test.ts:5: // TODO: fix this");
+    expect(result).toContain("Self-Documenting Code Required");
+  });
+
+  it("formats multiple comments", () => {
+    const comments = [
+      { file: "/app.ts", line: 10, text: "// Hack: workaround" },
+      { file: "/app.ts", line: 20, text: "// TODO: refactor" },
+    ];
+    const result = formatCommentMessage(comments, "/app.ts");
+    expect(result).toContain("/app.ts:10: // Hack: workaround");
+    expect(result).toContain("/app.ts:20: // TODO: refactor");
+  });
+
+  it("uses fallback file path for unknown comment file", () => {
+    const comments = [{ file: "unknown", line: 1, text: "// comment" }];
+    const result = formatCommentMessage(comments, "/test.ts");
+    expect(result).toContain("/test.ts:1: // comment");
+  });
+
+  it("includes allowed exceptions in message", () => {
+    const comments = [{ file: "/test.ts", line: 1, text: "// comment" }];
+    const result = formatCommentMessage(comments, "/test.ts");
+    expect(result).toContain("BDD (given/when/then)");
+    expect(result).toContain("@ts-ignore");
+    expect(result).toContain("eslint-disable");
+  });
+});
+
+describe("buildApplyPatchCheckerInput", () => {
+  it("builds Edit-style input when before and after both present", () => {
+    const file = {
+      filePath: "/test.ts",
+      after: "new content",
+      before: "old content",
+    };
+    const result = buildApplyPatchCheckerInput(file);
+    expect(result).toEqual({
+      tool_name: "Edit",
+      file_path: "/test.ts",
+      tool_input: {
+        file_path: "/test.ts",
+        old_string: "old content",
+        new_string: "new content",
+      },
+    });
+  });
+
+  it("builds Write-style input when only after present", () => {
+    const file = {
+      filePath: "/test.ts",
+      after: "new content",
+    };
+    const result = buildApplyPatchCheckerInput(file);
+    expect(result).toEqual({
+      tool_name: "Write",
+      file_path: "/test.ts",
+      tool_input: {
+        file_path: "/test.ts",
+        content: "new content",
+      },
+    });
+  });
+
+  it("returns null for explicit delete operations", () => {
+    const file = {
+      filePath: "/test.ts",
+      after: "",
+      before: "old content",
+      type: "delete",
+    };
+    const result = buildApplyPatchCheckerInput(file);
+    expect(result).toBeNull();
+  });
+
+  it("keeps empty after content for non-delete edits", () => {
+    const file = {
+      filePath: "/test.ts",
+      after: "",
+      before: "old content",
+      type: "update",
+    };
+    const result = buildApplyPatchCheckerInput(file);
+    expect(result).toEqual({
+      tool_name: "Edit",
+      file_path: "/test.ts",
+      tool_input: {
+        file_path: "/test.ts",
+        old_string: "old content",
+        new_string: "",
+      },
+    });
+  });
+
+  it("uses movePath when present", () => {
+    const file = {
+      filePath: "/old.ts",
+      movePath: "/new.ts",
+      after: "content",
+    };
+    const result = buildApplyPatchCheckerInput(file);
+    expect(result?.file_path).toBe("/new.ts");
+    expect(result?.tool_input.file_path).toBe("/new.ts");
+  });
+});
+
+describe("commentCheckerExtension", () => {
+  interface MockPiAPI {
+    handlers: Map<string, Array<(event: any, ctx: any) => Promise<unknown> | unknown>>;
+    commands: Map<string, { description: string; handler: (args: string, ctx: any) => Promise<void> }>;
+    on: (event: string, handler: (event: any, ctx: any) => Promise<unknown> | unknown) => void;
+    registerCommand: (name: string, options: { description: string; handler: (args: string, ctx: any) => Promise<void> }) => void;
+  }
+
+  function createMockPi(): MockPiAPI {
+    const handlers = new Map<string, Array<(event: any, ctx: any) => Promise<unknown> | unknown>>();
+    const commands = new Map<string, { description: string; handler: (args: string, ctx: any) => Promise<void> }>();
+
+    return {
+      handlers,
+      commands,
+      on: (event, handler) => {
+        const existing = handlers.get(event) ?? [];
+        existing.push(handler);
+        handlers.set(event, existing);
+      },
+      registerCommand: (name, options) => {
+        commands.set(name, options);
+      },
+    };
+  }
+
+  function createMockCtx() {
+    return {
+      ui: {
+        notify: vi.fn(),
+      },
+      cwd: process.cwd(),
+    };
+  }
+
+  function getSingleHandler(mockPi: MockPiAPI, event: string) {
+    const handlers = mockPi.handlers.get(event);
+    expect(handlers).toHaveLength(1);
+    return handlers![0];
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("registers tool_call, tool_result, and check-comments command", () => {
+    const mockPi = createMockPi();
+    commentCheckerExtension(mockPi as any, {
+      findBinary: () => ({ found: false, path: "comment-checker", source: "not-found" }),
+    });
+
+    expect(mockPi.handlers.has("tool_call")).toBe(true);
+    expect(mockPi.handlers.has("tool_result")).toBe(true);
+    expect(mockPi.commands.has("check-comments")).toBe(true);
+  });
+
+  it("blocks write tool calls with detected comments", async () => {
+    const mockPi = createMockPi();
+    const ctx = createMockCtx();
+    const runCommentCheckerMock = vi.fn().mockResolvedValue({
+      status: "ok",
+      result: {
+        comments: [{ file: "/tmp/test.ts", line: 1, text: "// TODO: fix this" }],
+      },
+      source: "with-comments",
+    });
+
+    commentCheckerExtension(mockPi as any, {
+      findBinary: () => ({ found: true, path: "/bin/comment-checker", source: "path" }),
+      runCommentChecker: runCommentCheckerMock,
+    });
+
+    const handler = getSingleHandler(mockPi, "tool_call");
+    const result = await handler(
+      { toolName: "write", input: { path: "/tmp/test.ts", content: "// TODO: fix this\nconst x = 1;" } },
+      ctx,
+    );
+
+    expect(runCommentCheckerMock).toHaveBeenCalledWith(
+      {
+        tool_name: "Write",
+        file_path: "/tmp/test.ts",
+        tool_input: {
+          file_path: "/tmp/test.ts",
+          content: "// TODO: fix this\nconst x = 1;",
+        },
+      },
+      "/bin/comment-checker",
+      expect.any(Function),
+    );
+    expect(result).toEqual({
+      block: true,
+      reason: expect.stringContaining("/tmp/test.ts:1: // TODO: fix this"),
+    });
+    expect(ctx.ui.notify).toHaveBeenCalledWith("AI comment detected — tool blocked", "warning");
+  });
+
+  it("allows clean write tool calls", async () => {
+    const mockPi = createMockPi();
+    const ctx = createMockCtx();
+    const runCommentCheckerMock = vi.fn().mockResolvedValue({
+      status: "ok",
+      result: { comments: [] },
+      source: "clean",
+    });
+
+    commentCheckerExtension(mockPi as any, {
+      findBinary: () => ({ found: true, path: "/bin/comment-checker", source: "path" }),
+      runCommentChecker: runCommentCheckerMock,
+    });
+
+    const handler = getSingleHandler(mockPi, "tool_call");
+    const result = await handler(
+      { toolName: "write", input: { path: "/tmp/test.ts", content: "const x = 1;" } },
+      ctx,
+    );
+
+    expect(result).toBeUndefined();
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith("AI comment detected — tool blocked", "warning");
+  });
+
+  it("ignores non-file-modifying tools in tool_call", async () => {
+    const mockPi = createMockPi();
+    const ctx = createMockCtx();
+    const runCommentCheckerMock = vi.fn();
+
+    commentCheckerExtension(mockPi as any, {
+      findBinary: () => ({ found: true, path: "/bin/comment-checker", source: "path" }),
+      runCommentChecker: runCommentCheckerMock,
+    });
+
+    const handler = getSingleHandler(mockPi, "tool_call");
+    const result = await handler(
+      { toolName: "read", input: { path: "/tmp/test.ts" } },
+      ctx,
+    );
+
+    expect(result).toBeUndefined();
+    expect(runCommentCheckerMock).not.toHaveBeenCalled();
+  });
+
+  it("warns once and does not block when binary is missing", async () => {
+    const mockPi = createMockPi();
+    const ctx = createMockCtx();
+    const runCommentCheckerMock = vi.fn();
+
+    commentCheckerExtension(mockPi as any, {
+      findBinary: () => ({ found: false, path: "comment-checker", source: "not-found" }),
+      runCommentChecker: runCommentCheckerMock,
+    });
+
+    const handler = getSingleHandler(mockPi, "tool_call");
+    const firstResult = await handler(
+      { toolName: "write", input: { path: "/tmp/test.ts", content: "// TODO" } },
+      ctx,
+    );
+    const secondResult = await handler(
+      { toolName: "write", input: { path: "/tmp/test.ts", content: "// TODO again" } },
+      ctx,
+    );
+
+    expect(firstResult).toBeUndefined();
+    expect(secondResult).toBeUndefined();
+    expect(runCommentCheckerMock).not.toHaveBeenCalled();
+    expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      "comment-checker: Binary not found. Run /check-comments for setup help.",
+      "warning",
+    );
+  });
+
+  it("checks apply_patch results with edit-style diffs and skips deletes", async () => {
+    const mockPi = createMockPi();
+    const ctx = createMockCtx();
+    const runCommentCheckerMock = vi.fn()
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: {
+          comments: [{ file: "/tmp/a.ts", line: 1, text: "// comment" }],
+        },
+        source: "with-comments",
+      })
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: { comments: [] },
+        source: "clean",
+      });
+
+    commentCheckerExtension(mockPi as any, {
+      findBinary: () => ({ found: true, path: "/bin/comment-checker", source: "path" }),
+      runCommentChecker: runCommentCheckerMock,
+    });
+
+    const handler = getSingleHandler(mockPi, "tool_result");
+    const result = await handler(
+      {
+        toolName: "apply_patch",
+        isError: false,
+        content: [],
+        details: {
+          metadata: {
+            files: [
+              { filePath: "/tmp/a.ts", before: "const a = 1;\n", after: "// comment\nconst a = 1;\n", type: "update" },
+              { filePath: "/tmp/b.ts", movePath: "/tmp/c.ts", before: "const b = 1;\n", after: "const c = 1;\n", type: "move" },
+              { filePath: "/tmp/deleted.ts", before: "const gone = true;\n", after: "", type: "delete" },
+            ],
+          },
+        },
+      },
+      ctx,
+    );
+
+    expect(runCommentCheckerMock).toHaveBeenCalledTimes(2);
+    expect(runCommentCheckerMock).toHaveBeenNthCalledWith(
+      1,
+      {
+        tool_name: "Edit",
+        file_path: "/tmp/a.ts",
+        tool_input: {
+          file_path: "/tmp/a.ts",
+          old_string: "const a = 1;\n",
+          new_string: "// comment\nconst a = 1;\n",
+        },
+      },
+      "/bin/comment-checker",
+      expect.any(Function),
+    );
+    expect(runCommentCheckerMock).toHaveBeenNthCalledWith(
+      2,
+      {
+        tool_name: "Edit",
+        file_path: "/tmp/c.ts",
+        tool_input: {
+          file_path: "/tmp/c.ts",
+          old_string: "const b = 1;\n",
+          new_string: "const c = 1;\n",
+        },
+      },
+      "/bin/comment-checker",
+      expect.any(Function),
+    );
+    expect(result).toEqual({
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining("/tmp/a.ts:1: // comment"),
+        },
+      ],
+      isError: true,
+    });
+    expect(ctx.ui.notify).toHaveBeenCalledWith("AI comment detected in apply_patch — see tool output", "warning");
   });
 });

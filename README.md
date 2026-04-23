@@ -40,7 +40,7 @@ git clone https://github.com/djdembeck/pi-comment-checker.git ~/.pi/agent/extens
 
 ## How It Works
 
-The extension monitors `write`, `edit`, `multiedit`, and `apply_patch` tool calls. When it detects unnecessary comments in the code being written, it marks the result as an error with a warning message.
+The extension monitors `write`, `edit`, and `multiedit` before execution, blocking those tool calls when it detects unnecessary comments. It also inspects `apply_patch` results and appends a warning message when comments are detected there.
 
 **Allowed exceptions:**
 - BDD comments (`// given`, `// when`, `// then`)
