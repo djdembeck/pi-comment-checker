@@ -168,6 +168,7 @@ async function runCommentChecker(
     let graceKillTimer: NodeJS.Timeout | null = null;
     let resolved = false;
 
+    /** Clears timeout and grace-kill timers to prevent resource leaks. */
     const cleanup = () => {
       if (timeout) {
         clearTimeout(timeout);
@@ -179,6 +180,11 @@ async function runCommentChecker(
       }
     };
 
+    /**
+     * Resolves the Promise exactly once, ensuring no duplicate resolutions.
+     * Cleans up timers before resolving to prevent resource leaks.
+     * @param value - The result value to resolve with (ok or error)
+     */
     const resolveOnce = (
       value:
         | {
@@ -384,6 +390,11 @@ export function buildApplyPatchCheckerInput(file: {
   };
 }
 
+/**
+ * Prints detected comments grouped by file to the console.
+ * Groups comments by file path and displays each file's comments under its header.
+ * @param comments - Array of detected comments with file, line, and text
+ */
 function printCommentsByFile(
   comments: Array<{ file: string; line: number; text: string }>,
 ): void {
@@ -1178,12 +1189,21 @@ export default function commentCheckerExtension(
   let warnedMissing = false;
   let cachedBinaryStatus: BinaryStatus | null = null;
 
+  /**
+   * Logs debug messages when PI_COMMENT_CHECKER_DEBUG environment variable is enabled.
+   * @param args - Values to log with [comment-checker] prefix
+   */
   function debug(...args: unknown[]) {
     if (DEBUG) {
       console.error("[comment-checker]", ...args);
     }
   }
 
+  /**
+   * Lazily resolves and caches the comment-checker binary status.
+   * Subsequent calls return the cached result without re-scanning paths.
+   * @returns Cached BinaryStatus indicating if the binary was found
+   */
   function getBinaryStatus(): BinaryStatus {
     if (cachedBinaryStatus === null) {
       cachedBinaryStatus = resolveBinary();
@@ -1191,6 +1211,12 @@ export default function commentCheckerExtension(
     return cachedBinaryStatus;
   }
 
+  /**
+   * Warns the user once per session when the comment-checker binary is not found.
+   * Uses a session-level flag to prevent repeated notifications.
+   * @param ctx - Pi context with UI notification capability
+   * @param status - Current binary status to check
+   */
   function warnOnce(
     ctx: {
       ui: { notify: (msg: string, type: "warning" | "error" | "info") => void };
