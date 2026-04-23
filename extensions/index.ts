@@ -1,6 +1,12 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { spawn } from "node:child_process";
-import { accessSync, constants, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
 
 import { dirname, delimiter, extname, join, parse, resolve } from "node:path";
 
@@ -51,22 +57,39 @@ const BINARY_TIMEOUT_MS = 30000;
  * ordered by search priority: sibling projects, user-local installs, system paths.
  * @returns Array of path candidates with their source classification
  */
-function getBinaryCandidates(): Array<{ path: string; source: BinaryStatus["source"] }> {
+function getBinaryCandidates(): Array<{
+  path: string;
+  source: BinaryStatus["source"];
+}> {
   return [
     // Sibling project (where go-claude-code-comment-checker was cloned)
     {
-      path: resolve(process.cwd(), "../go-claude-code-comment-checker/comment-checker"),
+      path: resolve(
+        process.cwd(),
+        "../go-claude-code-comment-checker/comment-checker",
+      ),
       source: "sibling" as const,
     },
     {
-      path: resolve(process.cwd(), "../../go-claude-code-comment-checker/comment-checker"),
+      path: resolve(
+        process.cwd(),
+        "../../go-claude-code-comment-checker/comment-checker",
+      ),
       source: "sibling" as const,
     },
     // User-local install locations (preferred over system) - only add if HOME is defined
-    ...(process.env.HOME ? [
-      { path: `${process.env.HOME}/.local/bin/comment-checker`, source: "global" as const },
-      { path: `${process.env.HOME}/go/bin/comment-checker`, source: "global" as const },
-    ] : []),
+    ...(process.env.HOME
+      ? [
+          {
+            path: `${process.env.HOME}/.local/bin/comment-checker`,
+            source: "global" as const,
+          },
+          {
+            path: `${process.env.HOME}/go/bin/comment-checker`,
+            source: "global" as const,
+          },
+        ]
+      : []),
     // System install locations
     { path: "/usr/local/bin/comment-checker", source: "global" as const },
     { path: "/usr/bin/comment-checker", source: "global" as const },
@@ -123,7 +146,14 @@ async function runCommentChecker(
   input: CommentCheckerInput,
   binaryPath: string,
   debugLog: (...args: unknown[]) => void,
-): Promise<{ status: "ok"; result: CommentCheckerOutput; source: "clean" | "with-comments" } | { status: "error"; error: Error | string }> {
+): Promise<
+  | {
+      status: "ok";
+      result: CommentCheckerOutput;
+      source: "clean" | "with-comments";
+    }
+  | { status: "error"; error: Error | string }
+> {
   return new Promise((resolve) => {
     const child = spawn(binaryPath, [], {
       stdio: ["pipe", "pipe", "pipe"],
@@ -138,6 +168,7 @@ async function runCommentChecker(
     let graceKillTimer: NodeJS.Timeout | null = null;
     let resolved = false;
 
+    /** Clears timeout and grace-kill timers to prevent resource leaks. */
     const cleanup = () => {
       if (timeout) {
         clearTimeout(timeout);
@@ -149,7 +180,20 @@ async function runCommentChecker(
       }
     };
 
-    const resolveOnce = (value: { status: "ok"; result: CommentCheckerOutput; source: "clean" | "with-comments" } | { status: "error"; error: Error | string }) => {
+    /**
+     * Resolves the Promise exactly once, ensuring no duplicate resolutions.
+     * Cleans up timers before resolving to prevent resource leaks.
+     * @param value - The result value to resolve with (ok or error)
+     */
+    const resolveOnce = (
+      value:
+        | {
+            status: "ok";
+            result: CommentCheckerOutput;
+            source: "clean" | "with-comments";
+          }
+        | { status: "error"; error: Error | string },
+    ) => {
       if (!resolved) {
         resolved = true;
         cleanup();
@@ -159,7 +203,9 @@ async function runCommentChecker(
 
     timeout = setTimeout(() => {
       timedOut = true;
-      debugLog(`Binary timed out after ${BINARY_TIMEOUT_MS}ms, killing process`);
+      debugLog(
+        `Binary timed out after ${BINARY_TIMEOUT_MS}ms, killing process`,
+      );
       child.kill("SIGTERM");
 
       // Grace period: SIGKILL if process hasn't exited
@@ -185,24 +231,41 @@ async function runCommentChecker(
       // 2 = block (problematic comments detected)
       // 1 or other = error (binary issue, parsing error, invalid input)
       if (code === 0) {
-        resolveOnce({ status: "ok", result: { comments: [] }, source: "clean" });
+        resolveOnce({
+          status: "ok",
+          result: { comments: [] },
+          source: "clean",
+        });
       } else if (code === 2) {
-        const comments = parseCommentOutput(stderr + '\n' + stdout);
+        const comments = parseCommentOutput(stderr + "\n" + stdout);
         if (!comments || comments.length === 0) {
-          debugLog('Comment-checker returned exit code 2 but with no comments, treating as fail');
+          debugLog(
+            "Comment-checker returned exit code 2 but with no comments, treating as fail",
+          );
           resolveOnce({
             status: "error",
-            error: new Error(`comment-checker exit code 2 with no parsed comments (possible blocked file or parsing issue). stderr: ${stderr}, stdout: ${stdout}`),
+            error: new Error(
+              `comment-checker exit code 2 with no parsed comments (possible blocked file or parsing issue). stderr: ${stderr}, stdout: ${stdout}`,
+            ),
           });
         } else {
-          resolveOnce({ status: "ok", result: { comments }, source: "with-comments" });
+          resolveOnce({
+            status: "ok",
+            result: { comments },
+            source: "with-comments",
+          });
         }
       } else {
         // Binary error - log when debug enabled, treat as pass (graceful degradation)
         if (!timedOut) {
-          debugLog(`Binary exited with code ${code} (treating as pass): ${stderr || stdout}`);
+          debugLog(
+            `Binary exited with code ${code} (treating as pass): ${stderr || stdout}`,
+          );
         }
-        resolveOnce({ status: "error", error: `Binary exited with code ${code}` });
+        resolveOnce({
+          status: "error",
+          error: `Binary exited with code ${code}`,
+        });
       }
     });
 
@@ -223,7 +286,9 @@ async function runCommentChecker(
  * @param output - Raw stdout/stderr output from the comment-checker binary
  * @returns Array of parsed comments with file path, line number, and comment text
  */
-export function parseCommentOutput(output: string): Array<{ file: string; line: number; text: string }> {
+export function parseCommentOutput(
+  output: string,
+): Array<{ file: string; line: number; text: string }> {
   const comments: Array<{ file: string; line: number; text: string }> = [];
 
   // Parse XML-like output: <comments file="..."><comment line-number="...">text</comment></comments>
@@ -251,8 +316,87 @@ export function parseCommentOutput(output: string): Array<{ file: string; line: 
   return comments;
 }
 
+/**
+ * Formats a comment block violation message for display.
+ * @param comments - Array of detected comments
+ * @param fallbackFilePath - File path to use when the checker output omits file metadata
+ * @returns Formatted message string
+ */
+export function formatCommentMessage(
+  comments: Array<{ file: string; line: number; text: string }>,
+  fallbackFilePath?: string,
+): string {
+  const commentList = comments
+    .map((c) => {
+      const file = c.file === "unknown" ? (fallbackFilePath ?? c.file) : c.file;
+      return `  ${file}:${c.line}: ${c.text}`;
+    })
+    .join("\n");
+
+  return [
+    "⚠️  AI Comment Detected — Self-Documenting Code Required",
+    "",
+    commentList,
+    "",
+    "These comments violate the self-documenting code principle.",
+    "Remove them and improve your code to be self-explanatory:",
+    "- Use meaningful variable/function names",
+    "- Extract functions instead of explaining with comments",
+    "- Let the code speak for itself",
+    "",
+    "Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint-disable), shebangs",
+  ].join("\n");
+}
+
+/**
+ * Builds checker input for apply_patch file changes.
+ * When both before and after are present, represents as Edit-style diff.
+ * Otherwise, uses Write-style full content check.
+ * @param file - File change metadata from apply_patch
+ * @returns Checker input or null if file should be skipped
+ */
+export function buildApplyPatchCheckerInput(file: {
+  filePath: string;
+  movePath?: string;
+  before?: string;
+  after: string;
+  type?: string;
+}): CommentCheckerInput | null {
+  if (file.type === "delete") {
+    return null;
+  }
+
+  const filePath = file.movePath ?? file.filePath;
+
+  if (file.before) {
+    return {
+      tool_name: "Edit",
+      file_path: filePath,
+      tool_input: {
+        file_path: filePath,
+        old_string: file.before,
+        new_string: file.after,
+      },
+    };
+  }
+
+  return {
+    tool_name: "Write",
+    file_path: filePath,
+    tool_input: {
+      file_path: filePath,
+      content: file.after,
+    },
+  };
+}
+
+/**
+ * Prints detected comments grouped by file to the console.
+ * Groups comments by file path and displays each file's comments under its header.
+ * @param comments - Array of detected comments with file, line, and text
+ */
 function printCommentsByFile(
-  comments: Array<{ file: string; line: number; text: string }>
+  comments: Array<{ file: string; line: number; text: string }>,
 ): void {
   const byFile = new Map<string, Array<{ line: number; text: string }>>();
   for (const comment of comments) {
@@ -274,7 +418,10 @@ function printCommentsByFile(
  * @param args - Object containing potential arguments
  * @returns The string value if present and valid, otherwise undefined
  */
-export function getStringArg(name: string, args: Record<string, unknown>): string | undefined {
+export function getStringArg(
+  name: string,
+  args: Record<string, unknown>,
+): string | undefined {
   const value = args[name];
   return typeof value === "string" ? value : undefined;
 }
@@ -285,8 +432,14 @@ export function getStringArg(name: string, args: Record<string, unknown>): strin
  * @param args - Tool input arguments object
  * @returns The file path string if found, otherwise undefined
  */
-export function extractFilePath(args: Record<string, unknown>): string | undefined {
-  return getStringArg("filePath", args) ?? getStringArg("file_path", args) ?? getStringArg("path", args);
+export function extractFilePath(
+  args: Record<string, unknown>,
+): string | undefined {
+  return (
+    getStringArg("filePath", args) ??
+    getStringArg("file_path", args) ??
+    getStringArg("path", args)
+  );
 }
 
 /**
@@ -328,12 +481,15 @@ export function isValidEdit(
  * @returns Edit object normalized to snake_case fields (old_string/new_string)
  */
 function normalizeEditToSnakeCase(
-  edit: { old_string: string; new_string: string } | { old_text: string; new_text: string } | { oldText: string; newText: string }
+  edit:
+    | { old_string: string; new_string: string }
+    | { old_text: string; new_text: string }
+    | { oldText: string; newText: string },
 ): { old_string: string; new_string: string } {
-  if ('old_string' in edit && 'new_string' in edit) {
+  if ("old_string" in edit && "new_string" in edit) {
     return { old_string: edit.old_string, new_string: edit.new_string };
   }
-  if ('old_text' in edit && 'new_text' in edit) {
+  if ("old_text" in edit && "new_text" in edit) {
     return { old_string: edit.old_text, new_string: edit.new_text };
   }
   return {
@@ -422,19 +578,25 @@ export function buildCheckerInput(
 
 /**
  * Type guard to validate file change metadata from apply_patch tool results.
- * Checks for required filePath and after properties, with optional movePath.
+ * Checks for required filePath and after properties, with optional movePath, before, and type fields.
  * @param file - Value to validate as a file change object
  * @returns True if file has valid structure for comment checking
  */
-export function isValidFileChange(
-  file: unknown,
-): file is { filePath: string; movePath?: string; after: string } {
+export function isValidFileChange(file: unknown): file is {
+  filePath: string;
+  movePath?: string;
+  before?: string;
+  after: string;
+  type?: string;
+} {
   if (typeof file !== "object" || file === null) return false;
   const f = file as Record<string, unknown>;
   return (
     typeof f.filePath === "string" &&
     typeof f.after === "string" &&
-    (f.movePath === undefined || typeof f.movePath === "string")
+    (f.movePath === undefined || typeof f.movePath === "string") &&
+    (f.before === undefined || typeof f.before === "string") &&
+    (f.type === undefined || typeof f.type === "string")
   );
 }
 
@@ -443,42 +605,67 @@ export function isValidFileChange(
  */
 const SOURCE_EXTENSIONS = new Set([
   // JavaScript/TypeScript
-  ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".mjs",
+  ".cjs",
   // Python
-  ".py", ".pyw",
+  ".py",
+  ".pyw",
   // Go
   ".go",
   // Rust
   ".rs",
   // Java/Kotlin
-  ".java", ".kt", ".kts",
+  ".java",
+  ".kt",
+  ".kts",
   // C/C++
-  ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx",
+  ".c",
+  ".cpp",
+  ".cc",
+  ".cxx",
+  ".h",
+  ".hpp",
+  ".hxx",
   // Ruby
-  ".rb", ".rake",
+  ".rb",
+  ".rake",
   // PHP
   ".php",
   // Swift/Objective-C
-  ".swift", ".m", ".mm",
+  ".swift",
+  ".m",
+  ".mm",
   // C#
   ".cs",
   // Scala
-  ".scala", ".sc",
+  ".scala",
+  ".sc",
   // Shell scripts
-  ".sh", ".bash", ".zsh",
+  ".sh",
+  ".bash",
+  ".zsh",
   // Other common languages
-  ".lua", ".r", ".rkt", ".clj", ".ex", ".exs", ".erl", ".hs", ".ml", ".fs", ".vb",
+  ".lua",
+  ".r",
+  ".rkt",
+  ".clj",
+  ".ex",
+  ".exs",
+  ".erl",
+  ".hs",
+  ".ml",
+  ".fs",
+  ".vb",
 ]);
 
 /**
  * Directories to always skip when scanning for source files.
  */
-const SKIP_DIRECTORIES = new Set([
-  ".git",
-  ".svn",
-  ".hg",
-  "node_modules",
-]);
+const SKIP_DIRECTORIES = new Set([".git", ".svn", ".hg", "node_modules"]);
 
 /**
  * Parsed gitignore pattern.
@@ -526,7 +713,10 @@ function parseGitignore(gitignorePath: string): GitignorePattern[] | null {
  * @param line - Single line from .gitignore
  * @returns Parsed pattern or null if invalid
  */
-export function parseGitignorePattern(line: string, sourceDir: string = ""): GitignorePattern | null {
+export function parseGitignorePattern(
+  line: string,
+  sourceDir: string = "",
+): GitignorePattern | null {
   let pattern = line;
   const negation = pattern.startsWith("!");
   if (negation) {
@@ -566,7 +756,11 @@ export function parseGitignorePattern(line: string, sourceDir: string = ""): Git
  * @param directoryOnly - Whether pattern should only match directories
  * @returns RegExp for matching
  */
-function globToRegex(glob: string, anchored: boolean, directoryOnly: boolean): RegExp {
+function globToRegex(
+  glob: string,
+  anchored: boolean,
+  directoryOnly: boolean,
+): RegExp {
   // For non-anchored patterns without slashes, prepend **/ to match at any depth
   // But for patterns containing slashes (like "src/dist"), keep them relative
   // so they don't over-broadly match nested paths
@@ -628,7 +822,15 @@ function globToRegex(glob: string, anchored: boolean, directoryOnly: boolean): R
           i = close + 1;
         }
       }
-    } else if (c === "." || c === "+" || c === "(" || c === ")" || c === "|" || c === "^" || c === "$") {
+    } else if (
+      c === "." ||
+      c === "+" ||
+      c === "(" ||
+      c === ")" ||
+      c === "|" ||
+      c === "^" ||
+      c === "$"
+    ) {
       // Escape regex metacharacters
       regexStr += "\\" + c;
       i++;
@@ -750,7 +952,9 @@ function findGitignore(startDir: string): string | null {
  * @param startDir - Directory to start searching from
  * @returns Array of { path, patterns } for each .gitignore found (closest first)
  */
-function findGitignoreAncestors(startDir: string): Array<{ path: string; patterns: GitignorePattern[] }> {
+function findGitignoreAncestors(
+  startDir: string,
+): Array<{ path: string; patterns: GitignorePattern[] }> {
   const result: Array<{ path: string; patterns: GitignorePattern[] }> = [];
   let current = startDir;
   const root = parse(startDir).root;
@@ -794,7 +998,9 @@ function findGitignoreAncestors(startDir: string): Array<{ path: string; pattern
  * @param patternSets - Array of pattern arrays from multiple .gitignore files (root to leaf order)
  * @returns Combined array of all patterns in evaluation order
  */
-function mergeGitignorePatterns(patternSets: GitignorePattern[][]): GitignorePattern[] {
+function mergeGitignorePatterns(
+  patternSets: GitignorePattern[][],
+): GitignorePattern[] {
   // Flatten all patterns - earlier sets (more root-level) come first,
   // so later patterns (more specific/closer to target) naturally override
   return patternSets.flat();
@@ -862,17 +1068,28 @@ export function discoverSourceFiles(
         }
 
         // Check gitignore
-        if (gitignorePatterns && isIgnoredByGitignore(fullPath, basePath, true, gitignorePatterns)) {
+        if (
+          gitignorePatterns &&
+          isIgnoredByGitignore(fullPath, basePath, true, gitignorePatterns)
+        ) {
           debugLog?.(`Skipping (gitignore): ${relativePath}`);
           continue;
         }
 
-        const subResult = discoverSourceFiles(fullPath, basePath, gitignorePatterns, debugLog);
+        const subResult = discoverSourceFiles(
+          fullPath,
+          basePath,
+          gitignorePatterns,
+          debugLog,
+        );
         files.push(...subResult.files);
         errors.push(...subResult.errors);
       } else if (entry.isFile() && isSourceFile(entry.name)) {
         // Check gitignore for files
-        if (gitignorePatterns && isIgnoredByGitignore(fullPath, basePath, false, gitignorePatterns)) {
+        if (
+          gitignorePatterns &&
+          isIgnoredByGitignore(fullPath, basePath, false, gitignorePatterns)
+        ) {
           debugLog?.(`Skipping (gitignore): ${relativePath}`);
           continue;
         }
@@ -881,9 +1098,14 @@ export function discoverSourceFiles(
     }
   } catch (err) {
     // Surface directory traversal errors with context instead of silently dropping
-    const errorContext = wrapWithContext(err, `Failed to read directory ${dir}`);
+    const errorContext = wrapWithContext(
+      err,
+      `Failed to read directory ${dir}`,
+    );
     errors.push({ path: dir, error: errorContext });
-    debugLog?.(`Directory traversal error: ${errorContext instanceof Error ? errorContext.message : errorContext}`);
+    debugLog?.(
+      `Directory traversal error: ${errorContext instanceof Error ? errorContext.message : errorContext}`,
+    );
   }
 
   return { files, errors };
@@ -900,13 +1122,16 @@ async function checkFileForComments(
   filePath: string,
   binaryPath: string,
   debugLog: (...args: unknown[]) => void,
-): Promise<{
-  status: "ok";
-  comments: Array<{ file: string; line: number; text: string }>;
-} | {
-  status: "failed";
-  error: Error | string;
-}> {
+): Promise<
+  | {
+      status: "ok";
+      comments: Array<{ file: string; line: number; text: string }>;
+    }
+  | {
+      status: "failed";
+      error: Error | string;
+    }
+> {
   try {
     const content = readFileSync(filePath, "utf-8");
     if (!content.trim()) {
@@ -914,7 +1139,7 @@ async function checkFileForComments(
     }
 
     const checkerInput: CommentCheckerInput = {
-      tool_name: "write",
+      tool_name: "Write",
       file_path: filePath,
       tool_input: {
         file_path: filePath,
@@ -924,9 +1149,9 @@ async function checkFileForComments(
 
     const result = await runCommentChecker(checkerInput, binaryPath, debugLog);
     if (result.status === "error") {
-      return { 
+      return {
         status: "failed",
-        error: result.error
+        error: result.error,
       };
     }
     return {
@@ -940,22 +1165,58 @@ async function checkFileForComments(
   }
 }
 
+interface CommentCheckerDependencies {
+  findBinary?: () => BinaryStatus;
+  runCommentChecker?: typeof runCommentChecker;
+  checkFileForComments?: typeof checkFileForComments;
+}
+
 /**
  * Pi extension entry point that registers event handlers to intercept and validate file modifications.
  * Hooks into write, edit, multiedit, and apply_patch tools to check for AI-generated comments.
  * Provides a /check-comments command for binary status verification and setup help.
  * @param pi - The Pi ExtensionAPI for registering handlers and commands
+ * @param deps - Optional test hooks for binary resolution and checker execution
  */
-export default function commentCheckerExtension(pi: ExtensionAPI) {
+export default function commentCheckerExtension(
+  pi: ExtensionAPI,
+  deps: CommentCheckerDependencies = {},
+) {
+  const resolveBinary = deps.findBinary ?? findBinary;
+  const executeChecker = deps.runCommentChecker ?? runCommentChecker;
+  const executeFileCheck = deps.checkFileForComments ?? checkFileForComments;
   const DEBUG = process.env.PI_COMMENT_CHECKER_DEBUG === "1";
   let warnedMissing = false;
+  let cachedBinaryStatus: BinaryStatus | null = null;
 
+  /**
+   * Logs debug messages when PI_COMMENT_CHECKER_DEBUG environment variable is enabled.
+   * @param args - Values to log with [comment-checker] prefix
+   */
   function debug(...args: unknown[]) {
     if (DEBUG) {
       console.error("[comment-checker]", ...args);
     }
   }
 
+  /**
+   * Lazily resolves and caches the comment-checker binary status.
+   * Subsequent calls return the cached result without re-scanning paths.
+   * @returns Cached BinaryStatus indicating if the binary was found
+   */
+  function getBinaryStatus(): BinaryStatus {
+    if (cachedBinaryStatus === null) {
+      cachedBinaryStatus = resolveBinary();
+    }
+    return cachedBinaryStatus;
+  }
+
+  /**
+   * Warns the user once per session when the comment-checker binary is not found.
+   * Uses a session-level flag to prevent repeated notifications.
+   * @param ctx - Pi context with UI notification capability
+   * @param status - Current binary status to check
+   */
   function warnOnce(
     ctx: {
       ui: { notify: (msg: string, type: "warning" | "error" | "info") => void };
@@ -971,74 +1232,55 @@ export default function commentCheckerExtension(pi: ExtensionAPI) {
     }
   }
 
-  // Check regular write/edit/multiedit tools
-  pi.on("tool_result", async (event, ctx) => {
+  // Check write/edit/multiedit tools BEFORE execution using tool_call
+  pi.on("tool_call", async (event, ctx) => {
     const toolName = event.toolName.toLowerCase();
 
     // Only check file modification tools
     if (!["write", "edit", "multiedit"].includes(toolName)) {
-      return;
+      return undefined;
     }
 
-    // Skip if tool errored
-    if (event.isError) {
-      return;
-    }
-
-    // Warn if binary not found (once per session)
-    const status = findBinary();
+    // Warn if binary not found (once per session) - but don't block
+    const status = getBinaryStatus();
     warnOnce(ctx, status);
 
     if (!status.found) {
       debug(`Skipping check: binary not found (${toolName})`);
-      return;
+      return undefined;
     }
 
     const checkerInput = buildCheckerInput(toolName, event.input);
     if (!checkerInput) {
       debug(`Skipping check: could not build checker input for ${toolName}`);
-      return;
+      return undefined;
     }
 
     debug(`Checking ${toolName} on ${checkerInput.file_path}`);
 
-    const result = await runCommentChecker(checkerInput, status.path, debug);
+    const result = await executeChecker(checkerInput, status.path, debug);
 
     if (result.status === "error") {
       debug(`Comment checker error: ${result.error}`);
-      return;
+      return undefined;
     }
-    if (result.status === "ok" && result.result.comments && result.result.comments.length > 0) {
-      const commentList = result.result.comments.map((c) => `  Line ${c.line}: ${c.text}`).join("\n");
-
-      const message = `
-⚠️  AI Comment Detected — Self-Documenting Code Required
-
-File: ${checkerInput.file_path}
-
-${commentList}
-
-These comments violate the self-documenting code principle.
-Remove them and improve your code to be self-explanatory:
-- Use meaningful variable/function names
-- Extract functions instead of explaining with comments
-- Let the code speak for itself
-
-Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint-disable), shebangs
-`;
-
-      // Notify user
-      ctx.ui.notify("AI comment detected — see tool output", "warning");
-
-      // Modify result to show warning
-      return {
-        content: [...(event.content || []), { type: "text", text: message }],
-        isError: true,
-      };
+    if (
+      result.status === "ok" &&
+      result.result.comments &&
+      result.result.comments.length > 0
+    ) {
+      const message = formatCommentMessage(
+        result.result.comments,
+        checkerInput.file_path,
+      );
+      ctx.ui.notify("AI comment detected — tool blocked", "warning");
+      return { block: true, reason: message };
     }
+
+    return undefined;
   });
 
-  // Handle apply_patch separately since it has different structure
+  // Handle apply_patch separately since it has different structure (tool_result only)
   pi.on("tool_result", async (event, ctx) => {
     if (event.toolName.toLowerCase() !== "apply_patch") {
       return;
@@ -1050,7 +1292,7 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
     }
 
     // Warn if binary not found (once per session)
-    const status = findBinary();
+    const status = getBinaryStatus();
     warnOnce(ctx, status);
 
     if (!status.found) {
@@ -1059,7 +1301,9 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
     }
 
     // apply_patch metadata contains the file changes
-    const metadata = (event.details as { metadata?: { files?: unknown[] } } | undefined)?.metadata;
+    const metadata = (
+      event.details as { metadata?: { files?: unknown[] } } | undefined
+    )?.metadata;
     if (!metadata?.files || !Array.isArray(metadata.files)) {
       return;
     }
@@ -1072,44 +1316,28 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
     }
 
     const allComments: Array<{ file: string; line: number; text: string }> = [];
+    let firstCheckedFilePath: string | undefined;
 
     for (const file of validFiles) {
-      // Skip deleted files
-      if (!file.after) continue;
+      const checkerInput = buildApplyPatchCheckerInput(file);
+      if (!checkerInput) continue;
 
-      const checkerInput: CommentCheckerInput = {
-        tool_name: "write",
-        file_path: file.movePath ?? file.filePath,
-        tool_input: {
-          file_path: file.movePath ?? file.filePath,
-          content: file.after,
-        },
-      };
+      if (firstCheckedFilePath === undefined) {
+        firstCheckedFilePath = checkerInput.file_path;
+      }
 
-      const result = await runCommentChecker(checkerInput, status.path, debug);
+      const result = await executeChecker(checkerInput, status.path, debug);
       if (result.status === "ok" && result.result.comments) {
         allComments.push(...result.result.comments);
       }
     }
 
     if (allComments.length > 0) {
-      const commentList = allComments.map((c) => `  ${c.file}:${c.line}: ${c.text}`).join("\n");
-
-      const message = `
-⚠️  AI Comment Detected — Self-Documenting Code Required
-
-${commentList}
-
-These comments violate the self-documenting code principle.
-Remove them and improve your code to be self-explanatory:
-- Use meaningful variable/function names
-- Extract functions instead of explaining with comments
-- Let the code speak for itself
-
-Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint-disable), shebangs
-`;
-
-      ctx.ui.notify("AI comment detected in apply_patch — see tool output", "warning");
+      const message = formatCommentMessage(allComments, firstCheckedFilePath);
+      ctx.ui.notify(
+        "AI comment detected in apply_patch — see tool output",
+        "warning",
+      );
 
       return {
         content: [...(event.content || []), { type: "text", text: message }],
@@ -1120,13 +1348,16 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
 
   // Register a command to check binary status or scan files for comments
   pi.registerCommand("check-comments", {
-    description: "Check comment-checker status, or scan a file/directory for problematic comments",
+    description:
+      "Check comment-checker status, or scan a file/directory for problematic comments",
     handler: async (args, ctx) => {
-      const status = findBinary();
+      const status = getBinaryStatus();
 
       if (!status.found) {
         const help = `Binary not found. Searched:
-${getBinaryCandidates().map((c) => `  - ${c.path}`).join("\n")}
+${getBinaryCandidates()
+  .map((c) => `  - ${c.path}`)
+  .join("\n")}
 
 To install the comment-checker binary:
 
@@ -1148,19 +1379,29 @@ Build from source:
 Download prebuilt:
    https://github.com/code-yeongyu/go-claude-code-comment-checker/releases
 `;
-        ctx.ui.notify("comment-checker: Binary not found — check console for help", "error");
+        ctx.ui.notify(
+          "comment-checker: Binary not found — check console for help",
+          "error",
+        );
         console.error(help);
         return;
       }
 
       // If no arguments, just show status
       if (!args || args.trim() === "") {
-        ctx.ui.notify(`comment-checker: ${status.path} (${status.source})`, "info");
-        console.log(`Comment-checker binary: ${status.path} (${status.source})`);
+        ctx.ui.notify(
+          `comment-checker: ${status.path} (${status.source})`,
+          "info",
+        );
+        console.log(
+          `Comment-checker binary: ${status.path} (${status.source})`,
+        );
         console.log("\nUsage: /check-comments [path]");
         console.log("  - No path: Show this status message");
         console.log("  - File path: Check that file for problematic comments");
-        console.log("  - Directory: Recursively scan for problematic comments in all source files");
+        console.log(
+          "  - Directory: Recursively scan for problematic comments in all source files",
+        );
         return;
       }
 
@@ -1184,13 +1425,17 @@ Download prebuilt:
         const ancestorGitignores = findGitignoreAncestors(targetPath);
         if (ancestorGitignores.length > 0) {
           // Use the directory of the closest .gitignore as base for relative paths
-          gitignoreDir = dirname(ancestorGitignores[ancestorGitignores.length - 1].path);
+          gitignoreDir = dirname(
+            ancestorGitignores[ancestorGitignores.length - 1].path,
+          );
           // Merge all patterns - root-level first, then more specific
-          const allPatternSets = ancestorGitignores.map(g => g.patterns);
+          const allPatternSets = ancestorGitignores.map((g) => g.patterns);
           gitignorePatterns = mergeGitignorePatterns(allPatternSets);
-          gitignoreSources.push(...ancestorGitignores.map(g => g.path));
+          gitignoreSources.push(...ancestorGitignores.map((g) => g.path));
           if (gitignorePatterns) {
-            console.log(`Using .gitignore: ${gitignoreSources.join(", ")} (${gitignorePatterns.length} patterns)`);
+            console.log(
+              `Using .gitignore: ${gitignoreSources.join(", ")} (${gitignorePatterns.length} patterns)`,
+            );
           }
         }
       }
@@ -1206,12 +1451,19 @@ Download prebuilt:
           return;
         }
       } else if (fileStats.isDirectory()) {
-        const discoveryResult = discoverSourceFiles(targetPath, gitignoreDir, gitignorePatterns, debug);
+        const discoveryResult = discoverSourceFiles(
+          targetPath,
+          gitignoreDir,
+          gitignorePatterns,
+          debug,
+        );
         filesToCheck.push(...discoveryResult.files);
         // Surface directory traversal errors separately - don't add to filesToCheck
         for (const err of discoveryResult.errors) {
           traversalFailures++;
-          console.error(`Directory traversal error for ${err.path}: ${err.error instanceof Error ? err.error.message : err.error}`);
+          console.error(
+            `Directory traversal error for ${err.path}: ${err.error instanceof Error ? err.error.message : err.error}`,
+          );
         }
         if (filesToCheck.length === 0 && traversalFailures === 0) {
           ctx.ui.notify("No source files found in directory", "warning");
@@ -1223,18 +1475,21 @@ Download prebuilt:
       }
 
       // Check each file
-      const allComments: Array<{ file: string; line: number; text: string }> = [];
+      const allComments: Array<{ file: string; line: number; text: string }> =
+        [];
       let filesChecked = 0;
       let filesWithComments = 0;
       let failedFiles = traversalFailures;
 
       for (const filePath of filesToCheck) {
-        const result = await checkFileForComments(filePath, status.path, debug);
+        const result = await executeFileCheck(filePath, status.path, debug);
         filesChecked++;
 
         if (result.status === "failed") {
           failedFiles++;
-          console.error(`Failed to check ${filePath}: ${result.error instanceof Error ? result.error.message : result.error}`);
+          console.error(
+            `Failed to check ${filePath}: ${result.error instanceof Error ? result.error.message : result.error}`,
+          );
           continue;
         }
 
@@ -1261,12 +1516,19 @@ Download prebuilt:
       } else if (failedFiles > 0) {
         // Emit incomplete-scan error when files could not be checked
         console.log("\n⚠ Scan completed with errors");
-        console.log(`${failedFiles} file(s) could not be checked due to errors.`);
-        ctx.ui.notify(`Scan incomplete: ${failedFiles} file(s) could not be checked`, "warning");
+        console.log(
+          `${failedFiles} file(s) could not be checked due to errors.`,
+        );
+        ctx.ui.notify(
+          `Scan incomplete: ${failedFiles} file(s) could not be checked`,
+          "warning",
+        );
         if (allComments.length > 0) {
           // Also show comments found in successfully checked files
           console.log("\n" + "-".repeat(60));
-          console.log("PROBLEMATIC COMMENTS FOUND (in successfully checked files):");
+          console.log(
+            "PROBLEMATIC COMMENTS FOUND (in successfully checked files):",
+          );
           console.log("-".repeat(60));
           printCommentsByFile(allComments);
         }
@@ -1277,19 +1539,28 @@ Download prebuilt:
         console.log("-".repeat(60));
         printCommentsByFile(allComments);
         console.log("\n" + "-".repeat(60));
-        console.log("These comments may violate the self-documenting code principle.");
+        console.log(
+          "These comments may violate the self-documenting code principle.",
+        );
         console.log("Consider:");
         console.log("  - Using meaningful variable/function names");
-        console.log("  - Extracting functions instead of explaining with comments");
+        console.log(
+          "  - Extracting functions instead of explaining with comments",
+        );
         console.log("  - Letting the code speak for itself");
-        console.log("\nAllowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint-disable), shebangs");
+        console.log(
+          "\nAllowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint-disable), shebangs",
+        );
         console.log("=".repeat(60));
-        ctx.ui.notify(`Found ${allComments.length} problematic comment(s) in ${filesWithComments} file(s)`, "warning");
+        ctx.ui.notify(
+          `Found ${allComments.length} problematic comment(s) in ${filesWithComments} file(s)`,
+          "warning",
+        );
       }
     },
   });
 
-  const initialStatus = findBinary();
+  const initialStatus = getBinaryStatus();
   debug(
     `Extension loaded. Binary: ${initialStatus.found ? "found" : "not found"} (${initialStatus.path})`,
   );
