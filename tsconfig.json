@@ -11,7 +11,9 @@
     "declaration": true,
     "types": ["node"],
     "paths": {
-      "@mariozechner/pi-coding-agent": ["./node_modules/@mariozechner/pi-coding-agent"]
+      "@mariozechner/pi-coding-agent": [
+        "./node_modules/@mariozechner/pi-coding-agent"
+      ]
     }
   },
   "include": ["extensions/**/*.ts"],

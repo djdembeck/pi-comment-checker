@@ -1,7 +1,7 @@
-language: 'en-US'
+language: "en-US"
 
 reviews:
-  profile: 'assertive'
+  profile: "assertive"
   high_level_summary: true
   poem: false
   review_status: true
@@ -16,7 +16,7 @@ reviews:
       - main
       - develop
   path_instructions:
-    - path: '**/*'
+    - path: "**/*"
       instructions: |
         Please review focusing on:
         - Code quality and consistency with existing patterns
@@ -35,16 +35,16 @@ reviews:
         - Extension API patterns are followed for Pi integration
   pre_merge_checks:
     description:
-      mode: 'error'
+      mode: "error"
     title:
-      mode: 'error'
-      requirements: 'Use conventional commits format: type(scope)?: description (scope is optional)'
+      mode: "error"
+      requirements: "Use conventional commits format: type(scope)?: description (scope is optional)"
     issue_assessment:
-      mode: 'warning'
+      mode: "warning"
     custom_checks:
-      - mode: 'error'
-        name: 'TypeScript strict compliance'
-        instructions: 'PR must pass typecheck (tsc --noEmit) and follow strict TypeScript patterns'
+      - mode: "error"
+        name: "TypeScript strict compliance"
+        instructions: "PR must pass typecheck (tsc --noEmit) and follow strict TypeScript patterns"
   tools:
     eslint:
       enabled: true
