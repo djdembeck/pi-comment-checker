@@ -40,9 +40,10 @@ git clone https://github.com/djdembeck/pi-comment-checker.git ~/.pi/agent/extens
 
 ## How It Works
 
-The extension monitors `write`, `edit`, and `multiedit` before execution, blocking those tool calls when it detects unnecessary comments. It also inspects `apply_patch` results and appends a warning message when comments are detected there.
+The extension monitors `write`, `edit`, and `multiedit` before execution, blocking those tool calls when it detects unnecessary comments. It also inspects `apply_patch` results and marks them as errors when comments are detected there.
 
 **Allowed exceptions:**
+
 - BDD comments (`// given`, `// when`, `// then`)
 - Linter directives (`// @ts-ignore`, `// eslint-disable`, `# noqa`)
 - Shebangs
@@ -75,6 +76,7 @@ Retroactively check existing files for unnecessary comments:
 ```
 
 **Output includes:**
+
 - Files scanned count
 - Files with problematic comments
 - Total comments found

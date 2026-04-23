@@ -343,16 +343,19 @@ describe("buildCheckerInput", () => {
 
   it("returns null for multiedit with non-array edits", () => {
     expect(
-      buildCheckerInput("multiedit", { filePath: "/test.ts", edits: "not-array" }),
+      buildCheckerInput("multiedit", {
+        filePath: "/test.ts",
+        edits: "not-array",
+      }),
     ).toBeNull();
   });
 });
 
 describe("isValidFileChange", () => {
   it("returns true for valid file change", () => {
-    expect(
-      isValidFileChange({ filePath: "/test.ts", after: "content" }),
-    ).toBe(true);
+    expect(isValidFileChange({ filePath: "/test.ts", after: "content" })).toBe(
+      true,
+    );
   });
 
   it("returns true for file change with movePath", () => {
@@ -488,7 +491,9 @@ describe("isIgnoredByGitignore", () => {
   it("matches directory pattern", () => {
     const patterns = [parseGitignorePattern("node_modules/")!];
     expect(isIgnoredByGitignore("node_modules", "", true, patterns)).toBe(true);
-    expect(isIgnoredByGitignore("node_modules/package", "", true, patterns)).toBe(true);
+    expect(
+      isIgnoredByGitignore("node_modules/package", "", true, patterns),
+    ).toBe(true);
   });
 
   it("handles negation", () => {
@@ -497,7 +502,9 @@ describe("isIgnoredByGitignore", () => {
       parseGitignorePattern("!important.log")!,
     ];
     expect(isIgnoredByGitignore("debug.log", "", false, patterns)).toBe(true);
-    expect(isIgnoredByGitignore("important.log", "", false, patterns)).toBe(false);
+    expect(isIgnoredByGitignore("important.log", "", false, patterns)).toBe(
+      false,
+    );
   });
 
   it("matches anchored pattern from root", () => {
@@ -511,14 +518,20 @@ describe("isIgnoredByGitignore", () => {
     const patterns = [parseGitignorePattern("/dist")!];
     // Anchored pattern "/dist" should NOT match "./src/dist" (nested)
     expect(isIgnoredByGitignore("./src/dist", "", true, patterns)).toBe(false);
-    expect(isIgnoredByGitignore("./nested/deep/dist", "", true, patterns)).toBe(false);
+    expect(isIgnoredByGitignore("./nested/deep/dist", "", true, patterns)).toBe(
+      false,
+    );
   });
 
   it("matches double-star pattern", () => {
     const patterns = [parseGitignorePattern("**/node_modules")!];
     expect(isIgnoredByGitignore("node_modules", "", true, patterns)).toBe(true);
-    expect(isIgnoredByGitignore("src/node_modules", "", true, patterns)).toBe(true);
-    expect(isIgnoredByGitignore("deep/nested/node_modules", "", true, patterns)).toBe(true);
+    expect(isIgnoredByGitignore("src/node_modules", "", true, patterns)).toBe(
+      true,
+    );
+    expect(
+      isIgnoredByGitignore("deep/nested/node_modules", "", true, patterns),
+    ).toBe(true);
   });
 
   it("skips directory-only patterns for files", () => {
@@ -573,8 +586,12 @@ describe("discoverSourceFiles integration", () => {
 
       // Should find both - src/main.ts and src/dist/test.ts since /dist only matches root
       expect(files.length).toBe(2);
-      const mainFile = files.find((f) => relative(tmpDir, f).replace(/\\/g, "/").includes("src/main.ts"));
-      const distFile = files.find((f) => relative(tmpDir, f).replace(/\\/g, "/").includes("src/dist/test.ts"));
+      const mainFile = files.find((f) =>
+        relative(tmpDir, f).replace(/\\/g, "/").includes("src/main.ts"),
+      );
+      const distFile = files.find((f) =>
+        relative(tmpDir, f).replace(/\\/g, "/").includes("src/dist/test.ts"),
+      );
       expect(mainFile).toBeDefined();
       expect(distFile).toBeDefined();
     } finally {
@@ -614,6 +631,12 @@ describe("formatCommentMessage", () => {
     expect(result).toContain("BDD (given/when/then)");
     expect(result).toContain("@ts-ignore");
     expect(result).toContain("eslint-disable");
+  });
+
+  it("uses literal 'unknown' when fallback is not provided and comment file is unknown", () => {
+    const comments = [{ file: "unknown", line: 1, text: "// comment" }];
+    const result = formatCommentMessage(comments);
+    expect(result).toContain("unknown:1: // comment");
   });
 });
 
@@ -696,15 +719,42 @@ describe("buildApplyPatchCheckerInput", () => {
 
 describe("commentCheckerExtension", () => {
   interface MockPiAPI {
-    handlers: Map<string, Array<(event: any, ctx: any) => Promise<unknown> | unknown>>;
-    commands: Map<string, { description: string; handler: (args: string, ctx: any) => Promise<void> }>;
-    on: (event: string, handler: (event: any, ctx: any) => Promise<unknown> | unknown) => void;
-    registerCommand: (name: string, options: { description: string; handler: (args: string, ctx: any) => Promise<void> }) => void;
+    handlers: Map<
+      string,
+      Array<(event: any, ctx: any) => Promise<unknown> | unknown>
+    >;
+    commands: Map<
+      string,
+      {
+        description: string;
+        handler: (args: string, ctx: any) => Promise<void>;
+      }
+    >;
+    on: (
+      event: string,
+      handler: (event: any, ctx: any) => Promise<unknown> | unknown,
+    ) => void;
+    registerCommand: (
+      name: string,
+      options: {
+        description: string;
+        handler: (args: string, ctx: any) => Promise<void>;
+      },
+    ) => void;
   }
 
   function createMockPi(): MockPiAPI {
-    const handlers = new Map<string, Array<(event: any, ctx: any) => Promise<unknown> | unknown>>();
-    const commands = new Map<string, { description: string; handler: (args: string, ctx: any) => Promise<void> }>();
+    const handlers = new Map<
+      string,
+      Array<(event: any, ctx: any) => Promise<unknown> | unknown>
+    >();
+    const commands = new Map<
+      string,
+      {
+        description: string;
+        handler: (args: string, ctx: any) => Promise<void>;
+      }
+    >();
 
     return {
       handlers,
@@ -742,7 +792,11 @@ describe("commentCheckerExtension", () => {
   it("registers tool_call, tool_result, and check-comments command", () => {
     const mockPi = createMockPi();
     commentCheckerExtension(mockPi as any, {
-      findBinary: () => ({ found: false, path: "comment-checker", source: "not-found" }),
+      findBinary: () => ({
+        found: false,
+        path: "comment-checker",
+        source: "not-found",
+      }),
     });
 
     expect(mockPi.handlers.has("tool_call")).toBe(true);
@@ -756,19 +810,31 @@ describe("commentCheckerExtension", () => {
     const runCommentCheckerMock = vi.fn().mockResolvedValue({
       status: "ok",
       result: {
-        comments: [{ file: "/tmp/test.ts", line: 1, text: "// TODO: fix this" }],
+        comments: [
+          { file: "/tmp/test.ts", line: 1, text: "// TODO: fix this" },
+        ],
       },
       source: "with-comments",
     });
 
     commentCheckerExtension(mockPi as any, {
-      findBinary: () => ({ found: true, path: "/bin/comment-checker", source: "path" }),
+      findBinary: () => ({
+        found: true,
+        path: "/bin/comment-checker",
+        source: "path",
+      }),
       runCommentChecker: runCommentCheckerMock,
     });
 
     const handler = getSingleHandler(mockPi, "tool_call");
     const result = await handler(
-      { toolName: "write", input: { path: "/tmp/test.ts", content: "// TODO: fix this\nconst x = 1;" } },
+      {
+        toolName: "write",
+        input: {
+          path: "/tmp/test.ts",
+          content: "// TODO: fix this\nconst x = 1;",
+        },
+      },
       ctx,
     );
 
@@ -788,7 +854,101 @@ describe("commentCheckerExtension", () => {
       block: true,
       reason: expect.stringContaining("/tmp/test.ts:1: // TODO: fix this"),
     });
-    expect(ctx.ui.notify).toHaveBeenCalledWith("AI comment detected — tool blocked", "warning");
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      "AI comment detected — tool blocked",
+      "warning",
+    );
+  });
+
+  it("blocks edit tool calls with detected comments", async () => {
+    const mockPi = createMockPi();
+    const ctx = createMockCtx();
+    const runCommentCheckerMock = vi.fn().mockResolvedValue({
+      status: "ok",
+      result: {
+        comments: [
+          { file: "/tmp/test.ts", line: 3, text: "// HACK: workaround" },
+        ],
+      },
+      source: "with-comments",
+    });
+
+    commentCheckerExtension(mockPi as any, {
+      findBinary: () => ({
+        found: true,
+        path: "/bin/comment-checker",
+        source: "path",
+      }),
+      runCommentChecker: runCommentCheckerMock,
+    });
+
+    const handler = getSingleHandler(mockPi, "tool_call");
+    const result = await handler(
+      {
+        toolName: "edit",
+        input: {
+          path: "/tmp/test.ts",
+          edits: [
+            {
+              oldText: "const x = 1;",
+              newText: "// HACK: workaround\nconst x = 1;",
+            },
+          ],
+        },
+      },
+      ctx,
+    );
+
+    expect(runCommentCheckerMock).toHaveBeenCalledWith(
+      {
+        tool_name: "Edit",
+        file_path: "/tmp/test.ts",
+        tool_input: {
+          file_path: "/tmp/test.ts",
+          old_string: "const x = 1;",
+          new_string: "// HACK: workaround\nconst x = 1;",
+        },
+      },
+      "/bin/comment-checker",
+      expect.any(Function),
+    );
+    expect(result).toEqual({
+      block: true,
+      reason: expect.stringContaining("/tmp/test.ts:3: // HACK: workaround"),
+    });
+  });
+
+  it("does not block when comment checker returns error", async () => {
+    const mockPi = createMockPi();
+    const ctx = createMockCtx();
+    const runCommentCheckerMock = vi.fn().mockResolvedValue({
+      status: "error",
+      error: "checker process failed",
+    });
+
+    commentCheckerExtension(mockPi as any, {
+      findBinary: () => ({
+        found: true,
+        path: "/bin/comment-checker",
+        source: "path",
+      }),
+      runCommentChecker: runCommentCheckerMock,
+    });
+
+    const handler = getSingleHandler(mockPi, "tool_call");
+    const result = await handler(
+      {
+        toolName: "write",
+        input: { path: "/tmp/test.ts", content: "const x = 1;" },
+      },
+      ctx,
+    );
+
+    expect(result).toBeUndefined();
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+      "AI comment detected — tool blocked",
+      "warning",
+    );
   });
 
   it("allows clean write tool calls", async () => {
@@ -801,18 +961,28 @@ describe("commentCheckerExtension", () => {
     });
 
     commentCheckerExtension(mockPi as any, {
-      findBinary: () => ({ found: true, path: "/bin/comment-checker", source: "path" }),
+      findBinary: () => ({
+        found: true,
+        path: "/bin/comment-checker",
+        source: "path",
+      }),
       runCommentChecker: runCommentCheckerMock,
     });
 
     const handler = getSingleHandler(mockPi, "tool_call");
     const result = await handler(
-      { toolName: "write", input: { path: "/tmp/test.ts", content: "const x = 1;" } },
+      {
+        toolName: "write",
+        input: { path: "/tmp/test.ts", content: "const x = 1;" },
+      },
       ctx,
     );
 
     expect(result).toBeUndefined();
-    expect(ctx.ui.notify).not.toHaveBeenCalledWith("AI comment detected — tool blocked", "warning");
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+      "AI comment detected — tool blocked",
+      "warning",
+    );
   });
 
   it("ignores non-file-modifying tools in tool_call", async () => {
@@ -821,7 +991,11 @@ describe("commentCheckerExtension", () => {
     const runCommentCheckerMock = vi.fn();
 
     commentCheckerExtension(mockPi as any, {
-      findBinary: () => ({ found: true, path: "/bin/comment-checker", source: "path" }),
+      findBinary: () => ({
+        found: true,
+        path: "/bin/comment-checker",
+        source: "path",
+      }),
       runCommentChecker: runCommentCheckerMock,
     });
 
@@ -841,17 +1015,27 @@ describe("commentCheckerExtension", () => {
     const runCommentCheckerMock = vi.fn();
 
     commentCheckerExtension(mockPi as any, {
-      findBinary: () => ({ found: false, path: "comment-checker", source: "not-found" }),
+      findBinary: () => ({
+        found: false,
+        path: "comment-checker",
+        source: "not-found",
+      }),
       runCommentChecker: runCommentCheckerMock,
     });
 
     const handler = getSingleHandler(mockPi, "tool_call");
     const firstResult = await handler(
-      { toolName: "write", input: { path: "/tmp/test.ts", content: "// TODO" } },
+      {
+        toolName: "write",
+        input: { path: "/tmp/test.ts", content: "// TODO" },
+      },
       ctx,
     );
     const secondResult = await handler(
-      { toolName: "write", input: { path: "/tmp/test.ts", content: "// TODO again" } },
+      {
+        toolName: "write",
+        input: { path: "/tmp/test.ts", content: "// TODO again" },
+      },
       ctx,
     );
 
@@ -868,7 +1052,8 @@ describe("commentCheckerExtension", () => {
   it("checks apply_patch results with edit-style diffs and skips deletes", async () => {
     const mockPi = createMockPi();
     const ctx = createMockCtx();
-    const runCommentCheckerMock = vi.fn()
+    const runCommentCheckerMock = vi
+      .fn()
       .mockResolvedValueOnce({
         status: "ok",
         result: {
@@ -883,7 +1068,11 @@ describe("commentCheckerExtension", () => {
       });
 
     commentCheckerExtension(mockPi as any, {
-      findBinary: () => ({ found: true, path: "/bin/comment-checker", source: "path" }),
+      findBinary: () => ({
+        found: true,
+        path: "/bin/comment-checker",
+        source: "path",
+      }),
       runCommentChecker: runCommentCheckerMock,
     });
 
@@ -896,9 +1085,25 @@ describe("commentCheckerExtension", () => {
         details: {
           metadata: {
             files: [
-              { filePath: "/tmp/a.ts", before: "const a = 1;\n", after: "// comment\nconst a = 1;\n", type: "update" },
-              { filePath: "/tmp/b.ts", movePath: "/tmp/c.ts", before: "const b = 1;\n", after: "const c = 1;\n", type: "move" },
-              { filePath: "/tmp/deleted.ts", before: "const gone = true;\n", after: "", type: "delete" },
+              {
+                filePath: "/tmp/a.ts",
+                before: "const a = 1;\n",
+                after: "// comment\nconst a = 1;\n",
+                type: "update",
+              },
+              {
+                filePath: "/tmp/b.ts",
+                movePath: "/tmp/c.ts",
+                before: "const b = 1;\n",
+                after: "const c = 1;\n",
+                type: "move",
+              },
+              {
+                filePath: "/tmp/deleted.ts",
+                before: "const gone = true;\n",
+                after: "",
+                type: "delete",
+              },
             ],
           },
         },
@@ -944,6 +1149,9 @@ describe("commentCheckerExtension", () => {
       ],
       isError: true,
     });
-    expect(ctx.ui.notify).toHaveBeenCalledWith("AI comment detected in apply_patch — see tool output", "warning");
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      "AI comment detected in apply_patch — see tool output",
+      "warning",
+    );
   });
 });
