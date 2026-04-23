@@ -743,6 +743,11 @@ describe("commentCheckerExtension", () => {
     ) => void;
   }
 
+  /**
+   * Creates a mock Pi API object with on/registerCommand event tracking.
+   * Used to verify extension registration behavior without a real Pi runtime.
+   * @returns Mock Pi API with handlers map, commands map, on, and registerCommand
+   */
   function createMockPi(): MockPiAPI {
     const handlers = new Map<
       string,
@@ -770,6 +775,10 @@ describe("commentCheckerExtension", () => {
     };
   }
 
+  /**
+   * Creates a mock Pi context with a stubbed ui.notify function and current working directory.
+   * @returns Mock context object for testing event handlers
+   */
   function createMockCtx() {
     return {
       ui: {
@@ -779,6 +788,12 @@ describe("commentCheckerExtension", () => {
     };
   }
 
+  /**
+   * Retrieves the single registered handler for a given event, asserting exactly one exists.
+   * @param mockPi - Mock Pi API instance to inspect
+   * @param event - Event name to retrieve handler for
+   * @returns The single handler function registered for the event
+   */
   function getSingleHandler(mockPi: MockPiAPI, event: string) {
     const handlers = mockPi.handlers.get(event);
     expect(handlers).toHaveLength(1);
