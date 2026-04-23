@@ -251,6 +251,76 @@ export function parseCommentOutput(output: string): Array<{ file: string; line: 
   return comments;
 }
 
+/**
+ * Formats a comment block violation message for display.
+ * @param comments - Array of detected comments
+ * @param fallbackFilePath - File path to use when the checker output omits file metadata
+ * @returns Formatted message string
+ */
+export function formatCommentMessage(
+  comments: Array<{ file: string; line: number; text: string }>,
+  fallbackFilePath?: string,
+): string {
+  const commentList = comments
+    .map((c) => {
+      const file = c.file === "unknown" ? fallbackFilePath ?? c.file : c.file;
+      return `  ${file}:${c.line}: ${c.text}`;
+    })
+    .join("\n");
+
+  return [
+    "⚠️  AI Comment Detected — Self-Documenting Code Required",
+    "",
+    commentList,
+    "",
+    "These comments violate the self-documenting code principle.",
+    "Remove them and improve your code to be self-explanatory:",
+    "- Use meaningful variable/function names",
+    "- Extract functions instead of explaining with comments",
+    "- Let the code speak for itself",
+    "",
+    "Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint-disable), shebangs",
+  ].join("\n");
+}
+
+/**
+ * Builds checker input for apply_patch file changes.
+ * When both before and after are present, represents as Edit-style diff.
+ * Otherwise, uses Write-style full content check.
+ * @param file - File change metadata from apply_patch
+ * @returns Checker input or null if file should be skipped
+ */
+export function buildApplyPatchCheckerInput(
+  file: { filePath: string; movePath?: string; before?: string; after: string; type?: string },
+): CommentCheckerInput | null {
+  if (file.type === "delete") {
+    return null;
+  }
+
+  const filePath = file.movePath ?? file.filePath;
+
+  if (file.before !== undefined) {
+    return {
+      tool_name: "Edit",
+      file_path: filePath,
+      tool_input: {
+        file_path: filePath,
+        old_string: file.before,
+        new_string: file.after,
+      },
+    };
+  }
+
+  return {
+    tool_name: "Write",
+    file_path: filePath,
+    tool_input: {
+      file_path: filePath,
+      content: file.after,
+    },
+  };
+}
+
 function printCommentsByFile(
   comments: Array<{ file: string; line: number; text: string }>
 ): void {
@@ -422,19 +492,21 @@ export function buildCheckerInput(
 
 /**
  * Type guard to validate file change metadata from apply_patch tool results.
- * Checks for required filePath and after properties, with optional movePath.
+ * Checks for required filePath and after properties, with optional movePath, before, and type fields.
  * @param file - Value to validate as a file change object
  * @returns True if file has valid structure for comment checking
  */
 export function isValidFileChange(
   file: unknown,
-): file is { filePath: string; movePath?: string; after: string } {
+): file is { filePath: string; movePath?: string; before?: string; after: string; type?: string } {
   if (typeof file !== "object" || file === null) return false;
   const f = file as Record<string, unknown>;
   return (
     typeof f.filePath === "string" &&
     typeof f.after === "string" &&
-    (f.movePath === undefined || typeof f.movePath === "string")
+    (f.movePath === undefined || typeof f.movePath === "string") &&
+    (f.before === undefined || typeof f.before === "string") &&
+    (f.type === undefined || typeof f.type === "string")
   );
 }
 
@@ -914,7 +986,7 @@ async function checkFileForComments(
     }
 
     const checkerInput: CommentCheckerInput = {
-      tool_name: "write",
+      tool_name: "Write",
       file_path: filePath,
       tool_input: {
         file_path: filePath,
@@ -940,13 +1012,21 @@ async function checkFileForComments(
   }
 }
 
+interface CommentCheckerDependencies {
+  findBinary?: () => BinaryStatus;
+  runCommentChecker?: typeof runCommentChecker;
+}
+
 /**
  * Pi extension entry point that registers event handlers to intercept and validate file modifications.
  * Hooks into write, edit, multiedit, and apply_patch tools to check for AI-generated comments.
  * Provides a /check-comments command for binary status verification and setup help.
  * @param pi - The Pi ExtensionAPI for registering handlers and commands
+ * @param deps - Optional test hooks for binary resolution and checker execution
  */
-export default function commentCheckerExtension(pi: ExtensionAPI) {
+export default function commentCheckerExtension(pi: ExtensionAPI, deps: CommentCheckerDependencies = {}) {
+  const resolveBinary = deps.findBinary ?? findBinary;
+  const executeChecker = deps.runCommentChecker ?? runCommentChecker;
   const DEBUG = process.env.PI_COMMENT_CHECKER_DEBUG === "1";
   let warnedMissing = false;
 
@@ -971,74 +1051,48 @@ export default function commentCheckerExtension(pi: ExtensionAPI) {
     }
   }
 
-  // Check regular write/edit/multiedit tools
-  pi.on("tool_result", async (event, ctx) => {
+  // Check write/edit/multiedit tools BEFORE execution using tool_call
+  pi.on("tool_call", async (event, ctx) => {
     const toolName = event.toolName.toLowerCase();
 
     // Only check file modification tools
     if (!["write", "edit", "multiedit"].includes(toolName)) {
-      return;
+      return undefined;
     }
 
-    // Skip if tool errored
-    if (event.isError) {
-      return;
-    }
-
-    // Warn if binary not found (once per session)
-    const status = findBinary();
+    // Warn if binary not found (once per session) - but don't block
+    const status = resolveBinary();
     warnOnce(ctx, status);
 
     if (!status.found) {
       debug(`Skipping check: binary not found (${toolName})`);
-      return;
+      return undefined;
     }
 
     const checkerInput = buildCheckerInput(toolName, event.input);
     if (!checkerInput) {
       debug(`Skipping check: could not build checker input for ${toolName}`);
-      return;
+      return undefined;
     }
 
     debug(`Checking ${toolName} on ${checkerInput.file_path}`);
 
-    const result = await runCommentChecker(checkerInput, status.path, debug);
+    const result = await executeChecker(checkerInput, status.path, debug);
 
     if (result.status === "error") {
       debug(`Comment checker error: ${result.error}`);
-      return;
+      return undefined;
     }
     if (result.status === "ok" && result.result.comments && result.result.comments.length > 0) {
-      const commentList = result.result.comments.map((c) => `  Line ${c.line}: ${c.text}`).join("\n");
-
-      const message = `
-⚠️  AI Comment Detected — Self-Documenting Code Required
-
-File: ${checkerInput.file_path}
-
-${commentList}
-
-These comments violate the self-documenting code principle.
-Remove them and improve your code to be self-explanatory:
-- Use meaningful variable/function names
-- Extract functions instead of explaining with comments
-- Let the code speak for itself
-
-Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint-disable), shebangs
-`;
-
-      // Notify user
-      ctx.ui.notify("AI comment detected — see tool output", "warning");
-
-      // Modify result to show warning
-      return {
-        content: [...(event.content || []), { type: "text", text: message }],
-        isError: true,
-      };
+      const message = formatCommentMessage(result.result.comments, checkerInput.file_path);
+      ctx.ui.notify("AI comment detected — tool blocked", "warning");
+      return { block: true, reason: message };
     }
+
+    return undefined;
   });
 
-  // Handle apply_patch separately since it has different structure
+  // Handle apply_patch separately since it has different structure (tool_result only)
   pi.on("tool_result", async (event, ctx) => {
     if (event.toolName.toLowerCase() !== "apply_patch") {
       return;
@@ -1050,7 +1104,7 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
     }
 
     // Warn if binary not found (once per session)
-    const status = findBinary();
+    const status = resolveBinary();
     warnOnce(ctx, status);
 
     if (!status.found) {
@@ -1074,41 +1128,18 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
     const allComments: Array<{ file: string; line: number; text: string }> = [];
 
     for (const file of validFiles) {
-      // Skip deleted files
-      if (!file.after) continue;
+      const checkerInput = buildApplyPatchCheckerInput(file);
+      if (!checkerInput) continue;
 
-      const checkerInput: CommentCheckerInput = {
-        tool_name: "write",
-        file_path: file.movePath ?? file.filePath,
-        tool_input: {
-          file_path: file.movePath ?? file.filePath,
-          content: file.after,
-        },
-      };
-
-      const result = await runCommentChecker(checkerInput, status.path, debug);
+      const result = await executeChecker(checkerInput, status.path, debug);
       if (result.status === "ok" && result.result.comments) {
         allComments.push(...result.result.comments);
       }
     }
 
     if (allComments.length > 0) {
-      const commentList = allComments.map((c) => `  ${c.file}:${c.line}: ${c.text}`).join("\n");
-
-      const message = `
-⚠️  AI Comment Detected — Self-Documenting Code Required
-
-${commentList}
-
-These comments violate the self-documenting code principle.
-Remove them and improve your code to be self-explanatory:
-- Use meaningful variable/function names
-- Extract functions instead of explaining with comments
-- Let the code speak for itself
-
-Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint-disable), shebangs
-`;
-
+      const firstFile = validFiles.find((file) => buildApplyPatchCheckerInput(file) !== null) ?? validFiles[0];
+      const message = formatCommentMessage(allComments, firstFile.movePath ?? firstFile.filePath);
       ctx.ui.notify("AI comment detected in apply_patch — see tool output", "warning");
 
       return {
@@ -1122,7 +1153,7 @@ Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint
   pi.registerCommand("check-comments", {
     description: "Check comment-checker status, or scan a file/directory for problematic comments",
     handler: async (args, ctx) => {
-      const status = findBinary();
+      const status = resolveBinary();
 
       if (!status.found) {
         const help = `Binary not found. Searched:
