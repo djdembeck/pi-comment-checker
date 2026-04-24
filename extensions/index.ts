@@ -1028,15 +1028,6 @@ function isSourceFile(filePath: string): boolean {
   return SOURCE_EXTENSIONS.has(extname(filePath).toLowerCase());
 }
 
-/**
- * Recursively discovers source files in a directory.
- * Skips common non-source directories like node_modules, .git, etc.
- * @param dir - Directory to scan
- * @param basePath - Base path for relative path calculation
- * @param gitignorePatterns - Optional gitignore patterns to respect
- * @param debugLog - Optional debug logging function
- * @returns Array of absolute paths to source files
- */
 export function discoverSourceFiles(
   dir: string,
   basePath: string = dir,
@@ -1055,19 +1046,15 @@ export function discoverSourceFiles(
         ? fullPath.slice(basePath.length).replace(/\\/g, "/").replace(/^\//, "")
         : fullPath;
 
-      // Handle symlinks first to avoid circular references and unreachable code
       if (entry.isSymbolicLink()) {
-        // Skip symlinks to avoid circular references
         continue;
       }
 
       if (entry.isDirectory()) {
-        // Skip VCS directories always
         if (SKIP_DIRECTORIES.has(entry.name)) {
           continue;
         }
 
-        // Check gitignore
         if (
           gitignorePatterns &&
           isIgnoredByGitignore(fullPath, basePath, true, gitignorePatterns)
@@ -1076,16 +1063,28 @@ export function discoverSourceFiles(
           continue;
         }
 
+        const gitignorePath = join(fullPath, ".gitignore");
+        let mergedPatterns = gitignorePatterns;
+        try {
+          const localPatterns = parseGitignore(gitignorePath);
+          if (localPatterns && gitignorePatterns) {
+            mergedPatterns = mergeGitignorePatterns([gitignorePatterns, localPatterns]);
+          } else if (localPatterns) {
+            mergedPatterns = localPatterns;
+          }
+        } catch {
+          // eslint-disable-line no-empty
+        }
+
         const subResult = discoverSourceFiles(
           fullPath,
           basePath,
-          gitignorePatterns,
+          mergedPatterns,
           debugLog,
         );
         files.push(...subResult.files);
         errors.push(...subResult.errors);
       } else if (entry.isFile() && isSourceFile(entry.name)) {
-        // Check gitignore for files
         if (
           gitignorePatterns &&
           isIgnoredByGitignore(fullPath, basePath, false, gitignorePatterns)
@@ -1097,7 +1096,6 @@ export function discoverSourceFiles(
       }
     }
   } catch (err) {
-    // Surface directory traversal errors with context instead of silently dropping
     const errorContext = wrapWithContext(
       err,
       `Failed to read directory ${dir}`,
@@ -1319,19 +1317,53 @@ export default function commentCheckerExtension(
     }
 
     const allComments: Array<{ file: string; line: number; text: string }> = [];
+    const failures: Array<{
+      file_path: string;
+      checker_input: CommentCheckerInput;
+      status: string;
+      error?: string | Error;
+      details?: string;
+    }> = [];
 
     for (const file of validFiles) {
       const checkerInput = buildApplyPatchCheckerInput(file);
       if (!checkerInput) continue;
 
       const result = await executeChecker(checkerInput, status.path, debug);
-      if (result.status === "ok" && result.result.comments) {
+      if (result.status === "error") {
+        failures.push({
+          file_path: file.filePath,
+          checker_input: checkerInput,
+          status: "error",
+          error: result.error,
+          details: `Comment checker failed for ${file.filePath}: ${result.error instanceof Error ? result.error.message : result.error}`,
+        });
+      } else if (result.status === "ok" && result.result.comments) {
         const commentsWithFallback = result.result.comments.map((comment) => ({
           ...comment,
           file: comment.file === "unknown" || !comment.file ? checkerInput.file_path : comment.file,
         }));
         allComments.push(...commentsWithFallback);
       }
+    }
+
+    if (failures.length > 0) {
+      const failureDetails = failures
+        .map((f) => `  - ${f.file_path}: ${f.details}`)
+        .join("\n");
+      const failureMessage = `⚠️  Incomplete Scan — Checker Failures\n\n${failureDetails}\n\n${failures.length} file(s) could not be fully validated. Comments may have been missed.`;
+      ctx.ui.notify(
+        "Incomplete scan: comment checker failures occurred",
+        "error",
+      );
+
+      return {
+        content: [
+          ...(event.content || []),
+          { type: "text", text: failureMessage },
+        ],
+        isError: true,
+      };
     }
 
     if (allComments.length > 0) {
