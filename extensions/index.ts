@@ -1232,16 +1232,13 @@ export default function commentCheckerExtension(
     }
   }
 
-  // Check write/edit/multiedit tools BEFORE execution using tool_call
   pi.on("tool_call", async (event, ctx) => {
     const toolName = event.toolName.toLowerCase();
 
-    // Only check file modification tools
     if (!["write", "edit", "multiedit"].includes(toolName)) {
       return undefined;
     }
 
-    // Warn if binary not found (once per session) - but don't block
     const status = getBinaryStatus();
     warnOnce(ctx, status);
 
@@ -1275,6 +1272,73 @@ export default function commentCheckerExtension(
       );
       ctx.ui.notify("AI comment detected — tool blocked", "warning");
       return { block: true, reason: message };
+    }
+
+    return undefined;
+  });
+
+  pi.on("tool_result", async (event, ctx) => {
+    const toolName = event.toolName.toLowerCase();
+
+    if (toolName !== "apply_patch") {
+      return undefined;
+    }
+
+    const status = getBinaryStatus();
+    warnOnce(ctx, status);
+
+    if (!status.found) {
+      debug(`Skipping check: binary not found (${toolName})`);
+      return undefined;
+    }
+
+    if (event.isError) {
+      return undefined;
+    }
+
+    const details = event.details as { metadata?: { files?: unknown[] } } | undefined;
+    const files = details?.metadata?.files;
+    if (!Array.isArray(files) || files.length === 0) {
+      return undefined;
+    }
+
+    const allComments: Array<{ file: string; line: number; text: string }> = [];
+
+    for (const file of files) {
+      if (!isValidFileChange(file)) {
+        continue;
+      }
+
+      const checkerInput = buildApplyPatchCheckerInput(file);
+      if (!checkerInput) {
+        debug(`Skipping check: could not build checker input for ${file.type}`);
+        continue;
+      }
+
+      debug(`Checking ${toolName} on ${checkerInput.file_path}`);
+
+      const result = await executeChecker(checkerInput, status.path, debug);
+
+      if (result.status === "error") {
+        debug(`Comment checker error: ${result.error}`);
+        continue;
+      }
+      if (
+        result.status === "ok" &&
+        result.result.comments &&
+        result.result.comments.length > 0
+      ) {
+        allComments.push(...result.result.comments);
+      }
+    }
+
+    if (allComments.length > 0) {
+      const message = formatCommentMessage(allComments);
+      ctx.ui.notify("AI comment detected in apply_patch — see tool output", "warning");
+      return {
+        content: [{ type: "text", text: message }],
+        isError: true,
+      };
     }
 
     return undefined;
