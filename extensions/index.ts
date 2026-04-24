@@ -328,7 +328,7 @@ export function formatCommentMessage(
 ): string {
   const commentList = comments
     .map((c) => {
-      const file = (!c.file || c.file === "unknown") && fallbackFilePath ? fallbackFilePath : c.file;
+      const file = !c.file || c.file === "unknown" ? (fallbackFilePath ?? "unknown") : c.file;
       return `  ${file}:${c.line}: ${c.text}`;
     })
     .join("\n");
@@ -1280,111 +1280,7 @@ export default function commentCheckerExtension(
     return undefined;
   });
 
-  // Handle apply_patch separately since it has different structure (tool_result only)
-  pi.on("tool_result", async (event, ctx) => {
-    if (event.toolName.toLowerCase() !== "apply_patch") {
-      return undefined;
-    }
 
-    // Skip if tool errored
-    if (event.isError) {
-      return undefined;
-    }
-
-    // Warn if binary not found (once per session)
-    const status = getBinaryStatus();
-    warnOnce(ctx, status);
-
-    if (!status.found) {
-      debug("Skipping apply_patch check: binary not found");
-      return undefined;
-    }
-
-    // apply_patch metadata contains the file changes
-    const metadata = (
-      event.details as { metadata?: { files?: unknown[] } } | undefined
-    )?.metadata;
-    if (!metadata?.files || !Array.isArray(metadata.files)) {
-      return undefined;
-    }
-
-    // Validate each file entry has required properties
-    const validFiles = metadata.files.filter(isValidFileChange);
-    if (validFiles.length === 0) {
-      debug("No valid file changes found in apply_patch metadata");
-      return undefined;
-    }
-
-    const allComments: Array<{ file: string; line: number; text: string }> = [];
-    const failures: Array<{
-      file_path: string;
-      checker_input: CommentCheckerInput;
-      status: string;
-      error?: string | Error;
-      details?: string;
-    }> = [];
-
-    for (const file of validFiles) {
-      const checkerInput = buildApplyPatchCheckerInput(file);
-      if (!checkerInput) continue;
-
-      const result = await executeChecker(checkerInput, status.path, debug);
-      if (result.status === "error") {
-        failures.push({
-          file_path: file.filePath,
-          checker_input: checkerInput,
-          status: "error",
-          error: result.error,
-          details: `Comment checker failed for ${file.filePath}: ${result.error instanceof Error ? result.error.message : result.error}`,
-        });
-      } else if (result.status === "ok" && result.result.comments) {
-        const commentsWithFallback = result.result.comments.map((comment) => ({
-          ...comment,
-          file: comment.file === "unknown" || !comment.file ? checkerInput.file_path : comment.file,
-        }));
-        allComments.push(...commentsWithFallback);
-      }
-    }
-
-    if (failures.length > 0) {
-      const failureDetails = failures
-        .map((f) => `  - ${f.file_path}: ${f.details}`)
-        .join("\n");
-      const failureMessage = `⚠️  Incomplete Scan — Checker Failures\n\n${failureDetails}\n\n${failures.length} file(s) could not be fully validated. Comments may have been missed.`;
-      ctx.ui.notify(
-        "Incomplete scan: comment checker failures occurred",
-        "error",
-      );
-
-      const combinedContent = [
-        ...(event.content || []),
-        { type: "text", text: failureMessage },
-      ];
-
-      if (allComments.length > 0) {
-        const message = formatCommentMessage(allComments);
-        combinedContent.push({ type: "text", text: message });
-      }
-
-      return {
-        content: combinedContent,
-        isError: true,
-      };
-    }
-
-    if (allComments.length > 0) {
-      const message = formatCommentMessage(allComments);
-      ctx.ui.notify(
-        "AI comment detected in apply_patch — see tool output",
-        "warning",
-      );
-
-      return {
-        content: [...(event.content || []), { type: "text", text: message }],
-        isError: true,
-      };
-    }
-  });
 
   // Register a command to check binary status or scan files for comments
   pi.registerCommand("check-comments", {
