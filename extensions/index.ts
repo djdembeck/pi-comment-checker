@@ -328,7 +328,7 @@ export function formatCommentMessage(
 ): string {
   const commentList = comments
     .map((c) => {
-      const file = c.file === "unknown" ? (fallbackFilePath ?? c.file) : c.file;
+      const file = c.file === "unknown" && fallbackFilePath ? fallbackFilePath : c.file;
       return `  ${file}:${c.line}: ${c.text}`;
     })
     .join("\n");
@@ -368,7 +368,7 @@ export function buildApplyPatchCheckerInput(file: {
 
   const filePath = file.movePath ?? file.filePath;
 
-  if (file.before) {
+  if (file.before !== undefined && file.before !== null) {
     return {
       tool_name: "Edit",
       file_path: filePath,
@@ -1201,12 +1201,15 @@ export default function commentCheckerExtension(
 
   /**
    * Lazily resolves and caches the comment-checker binary status.
-   * Subsequent calls return the cached result without re-scanning paths.
-   * @returns Cached BinaryStatus indicating if the binary was found
+   * Only caches successful resolution results.
    */
   function getBinaryStatus(): BinaryStatus {
     if (cachedBinaryStatus === null) {
-      cachedBinaryStatus = resolveBinary();
+      const status = resolveBinary();
+      if (status.found) {
+        cachedBinaryStatus = status;
+      }
+      return status;
     }
     return cachedBinaryStatus;
   }
@@ -1316,24 +1319,23 @@ export default function commentCheckerExtension(
     }
 
     const allComments: Array<{ file: string; line: number; text: string }> = [];
-    let firstCheckedFilePath: string | undefined;
 
     for (const file of validFiles) {
       const checkerInput = buildApplyPatchCheckerInput(file);
       if (!checkerInput) continue;
 
-      if (firstCheckedFilePath === undefined) {
-        firstCheckedFilePath = checkerInput.file_path;
-      }
-
       const result = await executeChecker(checkerInput, status.path, debug);
       if (result.status === "ok" && result.result.comments) {
-        allComments.push(...result.result.comments);
+        const commentsWithFallback = result.result.comments.map((comment) => ({
+          ...comment,
+          file: comment.file === "unknown" || !comment.file ? checkerInput.file_path : comment.file,
+        }));
+        allComments.push(...commentsWithFallback);
       }
     }
 
     if (allComments.length > 0) {
-      const message = formatCommentMessage(allComments, firstCheckedFilePath);
+      const message = formatCommentMessage(allComments);
       ctx.ui.notify(
         "AI comment detected in apply_patch — see tool output",
         "warning",
