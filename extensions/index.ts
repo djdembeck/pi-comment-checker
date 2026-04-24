@@ -1072,8 +1072,7 @@ export function discoverSourceFiles(
           } else if (localPatterns) {
             mergedPatterns = localPatterns;
           }
-        } catch {
-          // eslint-disable-line no-empty
+        } catch { // eslint-disable-line no-empty
         }
 
         const subResult = discoverSourceFiles(
@@ -1284,12 +1283,12 @@ export default function commentCheckerExtension(
   // Handle apply_patch separately since it has different structure (tool_result only)
   pi.on("tool_result", async (event, ctx) => {
     if (event.toolName.toLowerCase() !== "apply_patch") {
-      return;
+      return undefined;
     }
 
     // Skip if tool errored
     if (event.isError) {
-      return;
+      return undefined;
     }
 
     // Warn if binary not found (once per session)
@@ -1298,7 +1297,7 @@ export default function commentCheckerExtension(
 
     if (!status.found) {
       debug("Skipping apply_patch check: binary not found");
-      return;
+      return undefined;
     }
 
     // apply_patch metadata contains the file changes
@@ -1306,14 +1305,14 @@ export default function commentCheckerExtension(
       event.details as { metadata?: { files?: unknown[] } } | undefined
     )?.metadata;
     if (!metadata?.files || !Array.isArray(metadata.files)) {
-      return;
+      return undefined;
     }
 
     // Validate each file entry has required properties
     const validFiles = metadata.files.filter(isValidFileChange);
     if (validFiles.length === 0) {
       debug("No valid file changes found in apply_patch metadata");
-      return;
+      return undefined;
     }
 
     const allComments: Array<{ file: string; line: number; text: string }> = [];
