@@ -328,7 +328,7 @@ export function formatCommentMessage(
 ): string {
   const commentList = comments
     .map((c) => {
-      const file = c.file === "unknown" && fallbackFilePath ? fallbackFilePath : c.file;
+      const file = (!c.file || c.file === "unknown") && fallbackFilePath ? fallbackFilePath : c.file;
       return `  ${file}:${c.line}: ${c.text}`;
     })
     .join("\n");
@@ -1357,11 +1357,18 @@ export default function commentCheckerExtension(
         "error",
       );
 
+      const combinedContent = [
+        ...(event.content || []),
+        { type: "text", text: failureMessage },
+      ];
+
+      if (allComments.length > 0) {
+        const message = formatCommentMessage(allComments);
+        combinedContent.push({ type: "text", text: message });
+      }
+
       return {
-        content: [
-          ...(event.content || []),
-          { type: "text", text: failureMessage },
-        ],
+        content: combinedContent,
         isError: true,
       };
     }
