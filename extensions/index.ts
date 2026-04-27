@@ -1028,6 +1028,16 @@ function isSourceFile(filePath: string): boolean {
   return SOURCE_EXTENSIONS.has(extname(filePath).toLowerCase());
 }
 
+/**
+ * Recursively discovers source code files in a directory, respecting .gitignore rules.
+ * Walks the directory tree, skips ignored directories (node_modules, .git, etc.),
+ * and filters by source code extensions. Handles hierarchical .gitignore files.
+ * @param dir - Directory to scan
+ * @param basePath - Base directory for computing relative paths (default: dir)
+ * @param gitignorePatterns - Optional pre-parsed gitignore patterns to apply
+ * @param debugLog - Optional debug logging function
+ * @returns Object with arrays of discovered file paths and any errors encountered
+ */
 export function discoverSourceFiles(
   dir: string,
   basePath: string = dir,
@@ -1183,6 +1193,7 @@ export default function commentCheckerExtension(
   const executeChecker = deps.runCommentChecker ?? runCommentChecker;
   const executeFileCheck = deps.checkFileForComments ?? checkFileForComments;
   const DEBUG = process.env.PI_COMMENT_CHECKER_DEBUG === "1";
+  const NOTIFY = process.env.PI_COMMENT_CHECKER_NOTIFY === "1";
   let warnedMissing = false;
   let cachedBinaryStatus: BinaryStatus | null = null;
 
@@ -1270,7 +1281,9 @@ export default function commentCheckerExtension(
         result.result.comments,
         checkerInput.file_path,
       );
-      ctx.ui.notify("AI comment detected — tool blocked", "warning");
+      if (NOTIFY) {
+        ctx.ui.notify("AI comment detected — tool blocked", "warning");
+      }
       return { block: true, reason: message };
     }
 
@@ -1334,7 +1347,9 @@ export default function commentCheckerExtension(
 
     if (allComments.length > 0) {
       const message = formatCommentMessage(allComments);
-      ctx.ui.notify("AI comment detected in apply_patch — see tool output", "warning");
+      if (NOTIFY) {
+        ctx.ui.notify("AI comment detected in apply_patch — see tool output", "warning");
+      }
       return {
         content: [{ type: "text", text: message }],
         isError: true,
