@@ -840,6 +840,64 @@ describe("commentCheckerExtension", () => {
     expect(mockPi.commands.has("check-comments")).toBe(true);
   });
 
+  it("blocks write tool calls when PI_COMMENT_CHECKER_NOTIFY is unset (default-off)", async () => {
+    await withEnvVar(undefined, async () => {
+      const mockPi = createMockPi();
+      const ctx = createMockCtx();
+      const runCommentCheckerMock = vi.fn().mockResolvedValue({
+        status: "ok",
+        result: {
+          comments: [
+            { file: "/tmp/test.ts", line: 1, text: "// TODO: fix this" },
+          ],
+        },
+        source: "with-comments",
+      });
+
+      commentCheckerExtension(mockPi as any, {
+        findBinary: () => ({
+          found: true,
+          path: "/bin/comment-checker",
+          source: "path",
+        }),
+        runCommentChecker: runCommentCheckerMock,
+      });
+
+      const handler = getSingleHandler(mockPi, "tool_call");
+      const result = await handler(
+        {
+          toolName: "write",
+          input: {
+            path: "/tmp/test.ts",
+            content: "// TODO: fix this\nconst x = 1;",
+          },
+        },
+        ctx,
+      );
+
+      expect(runCommentCheckerMock).toHaveBeenCalledWith(
+        {
+          tool_name: "Write",
+          file_path: "/tmp/test.ts",
+          tool_input: {
+            file_path: "/tmp/test.ts",
+            content: "// TODO: fix this\nconst x = 1;",
+          },
+        },
+        "/bin/comment-checker",
+        expect.any(Function),
+      );
+      expect(result).toEqual({
+        block: true,
+        reason: expect.stringContaining("/tmp/test.ts:1: // TODO: fix this"),
+      });
+      expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+        "AI comment detected — tool blocked",
+        "warning",
+      );
+    });
+  });
+
   it("blocks write tool calls with detected comments", async () => {
     await withEnvVar("0", async () => {
       const mockPi = createMockPi();
