@@ -800,6 +800,27 @@ describe("commentCheckerExtension", () => {
     return handlers![0];
   }
 
+  async function withEnvVar(
+    envValue: string | undefined,
+    callback: () => Promise<void>,
+  ): Promise<void> {
+    const prev = process.env.PI_COMMENT_CHECKER_NOTIFY;
+    if (envValue === undefined) {
+      delete process.env.PI_COMMENT_CHECKER_NOTIFY;
+    } else {
+      process.env.PI_COMMENT_CHECKER_NOTIFY = envValue;
+    }
+    try {
+      await callback();
+    } finally {
+      if (prev === undefined) {
+        delete process.env.PI_COMMENT_CHECKER_NOTIFY;
+      } else {
+        process.env.PI_COMMENT_CHECKER_NOTIFY = prev;
+      }
+    }
+  }
+
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -820,9 +841,7 @@ describe("commentCheckerExtension", () => {
   });
 
   it("blocks write tool calls with detected comments", async () => {
-    const prev = process.env.PI_COMMENT_CHECKER_NOTIFY;
-    process.env.PI_COMMENT_CHECKER_NOTIFY = "0";
-    try {
+    await withEnvVar("0", async () => {
       const mockPi = createMockPi();
       const ctx = createMockCtx();
       const runCommentCheckerMock = vi.fn().mockResolvedValue({
@@ -876,19 +895,11 @@ describe("commentCheckerExtension", () => {
         "AI comment detected — tool blocked",
         "warning",
       );
-    } finally {
-      if (prev === undefined) {
-        delete process.env.PI_COMMENT_CHECKER_NOTIFY;
-      } else {
-        process.env.PI_COMMENT_CHECKER_NOTIFY = prev;
-      }
-    }
+    });
   });
 
   it("notifies on tool_call when PI_COMMENT_CHECKER_NOTIFY=1", async () => {
-    const prev = process.env.PI_COMMENT_CHECKER_NOTIFY;
-    process.env.PI_COMMENT_CHECKER_NOTIFY = "1";
-    try {
+    await withEnvVar("1", async () => {
       const mockPi = createMockPi();
       const ctx = createMockCtx();
       const runCommentCheckerMock = vi.fn().mockResolvedValue({
@@ -926,13 +937,7 @@ describe("commentCheckerExtension", () => {
         "AI comment detected — tool blocked",
         "warning",
       );
-    } finally {
-      if (prev === undefined) {
-        delete process.env.PI_COMMENT_CHECKER_NOTIFY;
-      } else {
-        process.env.PI_COMMENT_CHECKER_NOTIFY = prev;
-      }
-    }
+    });
   });
 
   it("blocks edit tool calls with detected comments", async () => {
@@ -1125,9 +1130,7 @@ describe("commentCheckerExtension", () => {
   });
 
   it("checks apply_patch results with edit-style diffs and skips deletes", async () => {
-    const prev = process.env.PI_COMMENT_CHECKER_NOTIFY;
-    process.env.PI_COMMENT_CHECKER_NOTIFY = "0";
-    try {
+    await withEnvVar("0", async () => {
       const mockPi = createMockPi();
       const ctx = createMockCtx();
       const runCommentCheckerMock = vi
@@ -1231,19 +1234,11 @@ describe("commentCheckerExtension", () => {
         "AI comment detected in apply_patch — see tool output",
         "warning",
       );
-    } finally {
-      if (prev === undefined) {
-        delete process.env.PI_COMMENT_CHECKER_NOTIFY;
-      } else {
-        process.env.PI_COMMENT_CHECKER_NOTIFY = prev;
-      }
-    }
+    });
   });
 
   it("notifies on tool_result when PI_COMMENT_CHECKER_NOTIFY=1", async () => {
-    const prev = process.env.PI_COMMENT_CHECKER_NOTIFY;
-    process.env.PI_COMMENT_CHECKER_NOTIFY = "1";
-    try {
+    await withEnvVar("1", async () => {
       const mockPi = createMockPi();
       const ctx = createMockCtx();
       const runCommentCheckerMock = vi.fn().mockResolvedValue({
@@ -1290,12 +1285,6 @@ describe("commentCheckerExtension", () => {
         "AI comment detected in apply_patch — see tool output",
         "warning",
       );
-    } finally {
-      if (prev === undefined) {
-        delete process.env.PI_COMMENT_CHECKER_NOTIFY;
-      } else {
-        process.env.PI_COMMENT_CHECKER_NOTIFY = prev;
-      }
-    }
+    });
   });
 });
