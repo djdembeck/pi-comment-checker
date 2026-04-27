@@ -88,6 +88,13 @@ Retroactively check existing files for unnecessary comments:
 
 **Supported file extensions:** `.js`, `.jsx`, `.ts`, `.tsx`, `.py`, `.go`, `.rs`, `.java`, `.kt`, `.c`, `.cpp`, `.h`, `.rb`, `.php`, `.swift`, `.cs`, and many more.
 
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `PI_COMMENT_CHECKER_DEBUG` | unset | Set to `1` to enable debug logging to stderr (`[comment-checker]` prefix) |
+| `PI_COMMENT_CHECKER_NOTIFY` | unset | Set to `1` to show terminal notifications when AI comments are detected. By default, detections are passed silently to the agent via tool return values |
+
 ## Related
 
 - [go-claude-code-comment-checker](https://github.com/code-yeongyu/go-claude-code-comment-checker) — Core comment detection engine
