@@ -876,6 +876,7 @@ describe("commentCheckerExtension", () => {
   });
 
   it("notifies on tool_call when PI_COMMENT_CHECKER_NOTIFY=1", async () => {
+    const prev = process.env.PI_COMMENT_CHECKER_NOTIFY;
     process.env.PI_COMMENT_CHECKER_NOTIFY = "1";
     try {
       const mockPi = createMockPi();
@@ -916,7 +917,11 @@ describe("commentCheckerExtension", () => {
         "warning",
       );
     } finally {
-      delete process.env.PI_COMMENT_CHECKER_NOTIFY;
+      if (prev === undefined) {
+        delete process.env.PI_COMMENT_CHECKER_NOTIFY;
+      } else {
+        process.env.PI_COMMENT_CHECKER_NOTIFY = prev;
+      }
     }
   });
 
@@ -1216,6 +1221,7 @@ describe("commentCheckerExtension", () => {
   });
 
   it("notifies on tool_result when PI_COMMENT_CHECKER_NOTIFY=1", async () => {
+    const prev = process.env.PI_COMMENT_CHECKER_NOTIFY;
     process.env.PI_COMMENT_CHECKER_NOTIFY = "1";
     try {
       const mockPi = createMockPi();
@@ -1265,7 +1271,11 @@ describe("commentCheckerExtension", () => {
         "warning",
       );
     } finally {
-      delete process.env.PI_COMMENT_CHECKER_NOTIFY;
+      if (prev === undefined) {
+        delete process.env.PI_COMMENT_CHECKER_NOTIFY;
+      } else {
+        process.env.PI_COMMENT_CHECKER_NOTIFY = prev;
+      }
     }
   });
 });
