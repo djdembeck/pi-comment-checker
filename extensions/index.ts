@@ -1028,6 +1028,16 @@ function isSourceFile(filePath: string): boolean {
   return SOURCE_EXTENSIONS.has(extname(filePath).toLowerCase());
 }
 
+/**
+ * Recursively discovers source code files in a directory, respecting .gitignore rules.
+ * Walks the directory tree, skips ignored directories (node_modules, .git, etc.),
+ * and filters by source code extensions. Handles hierarchical .gitignore files.
+ * @param dir - Directory to scan
+ * @param basePath - Base directory for computing relative paths (default: dir)
+ * @param gitignorePatterns - Optional pre-parsed gitignore patterns to apply
+ * @param debugLog - Optional debug logging function
+ * @returns Object with arrays of discovered file paths and any errors encountered
+ */
 export function discoverSourceFiles(
   dir: string,
   basePath: string = dir,
