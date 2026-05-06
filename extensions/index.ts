@@ -325,6 +325,7 @@ export function parseCommentOutput(
 export function formatCommentMessage(
   comments: Array<{ file: string; line: number; text: string }>,
   fallbackFilePath?: string,
+  isApplyPatch?: boolean,
 ): string {
   const commentList = comments
     .map((c) => {
@@ -345,6 +346,10 @@ export function formatCommentMessage(
     "- Let the code speak for itself",
     "",
     "Allowed exceptions: BDD (given/when/then), linter directives (@ts-ignore, eslint-disable), shebangs",
+    "",
+    ...(isApplyPatch
+      ? []
+      : ["If this is a false positive, add `skipCommentCheck: true` to the tool call input to override."]),
   ].join("\n");
 }
 
@@ -1250,6 +1255,11 @@ export default function commentCheckerExtension(
       return undefined;
     }
 
+    if ((event.input as Record<string, unknown>)?.skipCommentCheck === true) {
+      debug(`Skipping check: override flag set (${toolName})`);
+      return undefined;
+    }
+
     const status = getBinaryStatus();
     warnOnce(ctx, status);
 
@@ -1346,7 +1356,7 @@ export default function commentCheckerExtension(
     }
 
     if (allComments.length > 0) {
-      const message = formatCommentMessage(allComments);
+      const message = formatCommentMessage(allComments, undefined, true);
       if (NOTIFY) {
         ctx.ui.notify("AI comment detected in apply_patch — see tool output", "warning");
       }
