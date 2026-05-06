@@ -48,6 +48,18 @@ The extension monitors `write`, `edit`, and `multiedit` before execution, blocki
 - Linter directives (`// @ts-ignore`, `// eslint-disable`, `# noqa`)
 - Shebangs
 
+**False positive override:** If the checker flags a comment that is intentional, add `skipCommentCheck: true` to the tool call input to bypass the check for that single invocation:
+
+```json
+{
+  "path": "src/config.ts",
+  "content": "// RFC 4180: CSV fields must be quoted when containing commas",
+  "skipCommentCheck": true
+}
+```
+
+The error message itself includes this instruction, so the LLM agent knows how to override when it disagrees with the verdict. Note: this override is only available for `write`, `edit`, and `multiedit` tool calls — not `apply_patch`.
+
 **Supported languages:** 30+ via tree-sitter (TypeScript, Python, Go, Rust, Java, C/C++, Ruby, Swift, and more).
 
 For full details on comment detection rules, binary configuration, and advanced usage, see the [go-claude-code-comment-checker repository](https://github.com/code-yeongyu/go-claude-code-comment-checker).

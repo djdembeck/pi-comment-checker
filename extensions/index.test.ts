@@ -638,6 +638,20 @@ describe("formatCommentMessage", () => {
     const result = formatCommentMessage(comments);
     expect(result).toContain("unknown:1: // comment");
   });
+
+  it("includes override instructions in message", () => {
+    const comments = [{ file: "/test.ts", line: 1, text: "// comment" }];
+    const result = formatCommentMessage(comments, "/test.ts");
+    expect(result).toContain("skipCommentCheck: true");
+    expect(result).toContain("false positive");
+  });
+
+  it("omits override instructions for apply_patch messages", () => {
+    const comments = [{ file: "/test.ts", line: 1, text: "// comment" }];
+    const result = formatCommentMessage(comments, "/test.ts", true);
+    expect(result).not.toContain("skipCommentCheck");
+    expect(result).not.toContain("false positive");
+  });
 });
 
 describe("buildApplyPatchCheckerInput", () => {
@@ -1121,6 +1135,87 @@ describe("commentCheckerExtension", () => {
       "AI comment detected — tool blocked",
       "warning",
     );
+  });
+
+  it("skips check when skipCommentCheck: true is set in input", async () => {
+    const mockPi = createMockPi();
+    const ctx = createMockCtx();
+    const runCommentCheckerMock = vi.fn().mockResolvedValue({
+      status: "ok",
+      result: {
+        comments: [
+          { file: "/tmp/test.ts", line: 1, text: "// TODO: fix this" },
+        ],
+      },
+      source: "with-comments",
+    });
+
+    commentCheckerExtension(mockPi as any, {
+      findBinary: () => ({
+        found: true,
+        path: "/bin/comment-checker",
+        source: "path",
+      }),
+      runCommentChecker: runCommentCheckerMock,
+    });
+
+    const handler = getSingleHandler(mockPi, "tool_call");
+    const result = await handler(
+      {
+        toolName: "write",
+        input: {
+          path: "/tmp/test.ts",
+          content: "// TODO: fix this\nconst x = 1;",
+          skipCommentCheck: true,
+        },
+      },
+      ctx,
+    );
+
+    expect(result).toBeUndefined();
+    expect(runCommentCheckerMock).not.toHaveBeenCalled();
+  });
+
+  it("still blocks when skipCommentCheck is not true", async () => {
+    const mockPi = createMockPi();
+    const ctx = createMockCtx();
+    const runCommentCheckerMock = vi.fn().mockResolvedValue({
+      status: "ok",
+      result: {
+        comments: [
+          { file: "/tmp/test.ts", line: 1, text: "// TODO: fix this" },
+        ],
+      },
+      source: "with-comments",
+    });
+
+    commentCheckerExtension(mockPi as any, {
+      findBinary: () => ({
+        found: true,
+        path: "/bin/comment-checker",
+        source: "path",
+      }),
+      runCommentChecker: runCommentCheckerMock,
+    });
+
+    const handler = getSingleHandler(mockPi, "tool_call");
+    const result = await handler(
+      {
+        toolName: "write",
+        input: {
+          path: "/tmp/test.ts",
+          content: "// TODO: fix this\nconst x = 1;",
+          skipCommentCheck: false,
+        },
+      },
+      ctx,
+    );
+
+    expect(runCommentCheckerMock).toHaveBeenCalled();
+    expect(result).toEqual({
+      block: true,
+      reason: expect.stringContaining("/tmp/test.ts:1: // TODO: fix this"),
+    });
   });
 
   it("ignores non-file-modifying tools in tool_call", async () => {
